@@ -20,9 +20,7 @@ build:
 # Run all tests (ensures Vault is up via docker-compose)
 test:
     @echo "Starting Vault for tests..."
-    docker-compose up -d vault
     cargo test -- --test-threads=1
-    docker-compose down
 
 # Run clippy (lint) and format check
 lint:

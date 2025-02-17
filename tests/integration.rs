@@ -7,29 +7,16 @@
 
 mod common;
 
+use common::setup_vault_container;
 use std::time::Duration;
-use testcontainers::{
-    core::{IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
-    GenericImage, ImageExt,
-};
 use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
-    let container = GenericImage::new("hashicorp/vault", "1.18.4")
-        .with_exposed_port(8200.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
-        .with_network("bridge")
-        .with_env_var("VAULT_DEV_ROOT_TOKEN_ID", "root")
-        .with_env_var("VAULT_DEV_LISTEN_ADDRESS", "0.0.0.0:8200")
-        .with_cmd(vec!["server", "-dev", "-dev-root-token-id=root"])
-        .start()
-        .await
-        .unwrap();
+    let vault_container = setup_vault_container().await;
 
-    let host = container.get_host().await.unwrap();
-    let host_port = container.get_host_port_ipv4(8200).await.unwrap();
+    let host = vault_container.get_host().await.unwrap();
+    let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
 
     let vault_url = format!(
         "http://{host}:{host_port}",
@@ -58,20 +45,9 @@ async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
-    let container = GenericImage::new("hashicorp/vault", "1.18.4")
-        .with_exposed_port(8200.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
-        .with_network("bridge")
-        .with_env_var("VAULT_DEV_ROOT_TOKEN_ID", "root")
-        .with_env_var("VAULT_DEV_LISTEN_ADDRESS", "0.0.0.0:8200")
-        .with_cmd(vec!["server", "-dev", "-dev-root-token-id=root"])
-        .start()
-        .await
-        .unwrap();
-
-    let host = container.get_host().await.unwrap();
-    let host_port = container.get_host_port_ipv4(8200).await.unwrap();
-
+    let vault_container = setup_vault_container().await;
+    let host = vault_container.get_host().await.unwrap();
+    let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!(
         "http://{host}:{host_port}",
         host = host,
