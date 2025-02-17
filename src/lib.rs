@@ -1,4 +1,3 @@
-// src/lib.rs
 //! merka-vault - Vault provisioning library
 //!
 //! This crate provides tools to initialize and configure a HashiCorp Vault server.
