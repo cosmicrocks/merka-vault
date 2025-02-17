@@ -1257,6 +1257,7 @@ dependencies = [
  "clap",
  "futures-util",
  "lazy_static",
+ "once_cell",
  "openssl",
  "reqwest",
  "serde",
