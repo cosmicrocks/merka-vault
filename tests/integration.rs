@@ -2,9 +2,7 @@
 //!
 //! These tests use the shared Vault fixture defined in `tests/common.rs`.
 //! They exercise the PKI and AppRole setup functions from the merka-vault library.
-//! The tests run only if the environment variable
-//! `MERKA_VAULT_RUN_INTEGRATION_TESTS` is set; otherwise they are skipped.
-
+//!
 mod common;
 
 use common::{setup_vault_container, setup_vault_dev_container};
