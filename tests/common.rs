@@ -12,7 +12,7 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 pub struct VaultFixture {
     container: ContainerAsync<GenericImage>,
-    vault_addr: String,
+    addr: u16,
 }
 
 impl VaultFixture {
@@ -27,15 +27,8 @@ impl VaultFixture {
             .await
             .unwrap();
 
-        let vault_addr = format!("http://127.0.0.1:8200");
+        let addr = container.get_host_port_ipv4(8200).await.unwrap();
 
-        VaultFixture {
-            container,
-            vault_addr,
-        }
-    }
-
-    pub fn vault_addr(&self) -> String {
-        self.vault_addr.clone()
+        VaultFixture { container, addr }
     }
 }

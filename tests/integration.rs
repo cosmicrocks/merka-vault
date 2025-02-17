@@ -8,13 +8,34 @@
 mod common;
 
 use std::time::Duration;
+use testcontainers::{
+    core::{IntoContainerPort, WaitFor},
+    runners::AsyncRunner,
+    GenericImage, ImageExt,
+};
 use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
-    let vault = common::VaultFixture::new().await;
+    let container = GenericImage::new("hashicorp/vault", "1.18.4")
+        .with_exposed_port(8200.tcp())
+        .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
+        .with_network("bridge")
+        .with_env_var("VAULT_DEV_ROOT_TOKEN_ID", "root")
+        .with_env_var("VAULT_DEV_LISTEN_ADDRESS", "0.0.0.0:8200")
+        .with_cmd(vec!["server", "-dev", "-dev-root-token-id=root"])
+        .start()
+        .await
+        .unwrap();
 
-    let vault_addr = vault.vault_addr();
+    let host = container.get_host().await.unwrap();
+    let host_port = container.get_host_port_ipv4(8200).await.unwrap();
+
+    let vault_url = format!(
+        "http://{host}:{host_port}",
+        host = host,
+        host_port = host_port
+    );
 
     // Give Vault a few seconds to be extra sure it is ready.
     sleep(Duration::from_secs(3)).await;
@@ -22,7 +43,7 @@ async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
     // Call the PKI setup function from your library.
     let domain = "example.com";
     let ttl = "8760h";
-    let (cert, role_name) = merka_vault::vault::setup_pki(&vault_addr, "root", domain, ttl).await?;
+    let (cert, role_name) = merka_vault::vault::setup_pki(&vault_url, "root", domain, ttl).await?;
 
     println!("CA Certificate:\n{}", cert);
     println!("PKI role name: {}", role_name);
@@ -37,17 +58,32 @@ async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
-    let vault = common::VaultFixture::new().await;
+    let container = GenericImage::new("hashicorp/vault", "1.18.4")
+        .with_exposed_port(8200.tcp())
+        .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
+        .with_network("bridge")
+        .with_env_var("VAULT_DEV_ROOT_TOKEN_ID", "root")
+        .with_env_var("VAULT_DEV_LISTEN_ADDRESS", "0.0.0.0:8200")
+        .with_cmd(vec!["server", "-dev", "-dev-root-token-id=root"])
+        .start()
+        .await
+        .unwrap();
 
-    let vault_addr = vault.vault_addr();
+    let host = container.get_host().await.unwrap();
+    let host_port = container.get_host_port_ipv4(8200).await.unwrap();
+
+    let vault_url = format!(
+        "http://{host}:{host_port}",
+        host = host,
+        host_port = host_port
+    );
 
     sleep(Duration::from_secs(3)).await;
 
     // Test the AppRole setup.
     let role_name = "test-role";
     let policies = vec!["default".to_string()];
-    let creds =
-        merka_vault::vault::setup_approle(&vault_addr, "root", role_name, &policies).await?;
+    let creds = merka_vault::vault::setup_approle(&vault_url, "root", role_name, &policies).await?;
 
     println!(
         "AppRole credentials: role_id: {}, secret_id: {}",
