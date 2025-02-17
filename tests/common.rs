@@ -25,7 +25,7 @@ impl VaultFixture {
             .with_mapped_port(8200, 8200.tcp())
             .start()
             .await
-            .unwrap()
+            .unwrap();
 
         let vault_addr = format!("http://127.0.0.1:8200");
 
