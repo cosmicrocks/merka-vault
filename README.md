@@ -56,7 +56,7 @@ Mac:
 
 ```sh
 ## Install Rust
-brew install rustup
+curl https://sh.rustup.rs -sSf | sh
 ## Install Justfile
 brew install just
 
