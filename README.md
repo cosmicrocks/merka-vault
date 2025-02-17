@@ -52,10 +52,14 @@ just test
 
 ## Development
 
-```sh
-# Install nix
-curl -L https://nixos.org/nix/install | sh
+Mac:
 
-nix-store --gc
-nix --accept-flake-config profile install github:juspay/omnix
+```sh
+## Install Rust
+brew install rustup
+## Install Justfile
+brew install just
+
+## Run tests
+just test
 ```
