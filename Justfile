@@ -35,3 +35,6 @@ fix:
 # Clean build artifacts
 clean:
     cargo clean
+
+code2prompt:
+    code2prompt --include '*.yml,*.yaml,*.toml,*.md,*.rs' .
