@@ -6,7 +6,7 @@ description = "Vault provisioning and management crate integrating with merka-co
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/cosmicrocks/merka-vault"
 documentation = "https://docs.rs/merka-vault"
-keywords = ["vault", "pki", "hashicorp-vault", "merka", "cli", "actor"]
+keywords = ["vault", "pki", "hashicorp-vault", "merka", "cli"]
 categories = ["api-bindings", "security", "dev-tools"]
 
 [dependencies]
