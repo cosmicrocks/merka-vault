@@ -5,8 +5,10 @@ jobs:
   rust:
     uses: esomore/ghworkflow-rust/.github/workflows/rust.yml@main
     permissions:
-      contents: read
       issues: write
+      attestations: write
+      contents: write
+      packages: write
     with:
       coveralls: true
       codecov: true
