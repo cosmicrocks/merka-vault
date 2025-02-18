@@ -13,7 +13,7 @@ jobs:
       coveralls: true
       codecov: true
       publish_cratesio: true
-      publish_github_release: true
+      publish_github_release: false
     secrets:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
