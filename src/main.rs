@@ -1,6 +1,6 @@
 // src/main.rs
 use clap::{Parser, Subcommand};
-use merka_vault::vault;
+use merka_vault2::vault;
 
 #[derive(Parser)]
 #[command(
