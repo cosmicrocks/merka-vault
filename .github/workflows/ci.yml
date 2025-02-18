@@ -12,3 +12,4 @@ jobs:
         ["debian/debian/bookworm", "ubuntu/ubuntu/jammy"]
     secrets:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
