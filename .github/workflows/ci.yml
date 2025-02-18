@@ -15,4 +15,3 @@ jobs:
     secrets:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
