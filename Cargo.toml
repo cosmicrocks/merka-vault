@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/cosmicrocks/merka-vault"
 documentation = "https://docs.rs/merka-vault"
 keywords = ["vault", "pki", "hashicorp-vault", "merka", "cli"]
-categories = ["api-bindings", "security", "dev-tools"]
+categories = ["api-bindings", "command-line-utilities"]
 
 [dependencies]
 actix = "0.13.5"
