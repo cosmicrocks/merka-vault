@@ -13,4 +13,4 @@ jobs:
       publish_cratesio: true
       publish_github_release: true
     secrets:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
