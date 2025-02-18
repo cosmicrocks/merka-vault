@@ -1,6 +1,6 @@
 use actix::prelude::*;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use merka_vault::actor::{InitVault, VaultActor};
+use merka_vault2::actor::{InitVault, VaultActor};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
