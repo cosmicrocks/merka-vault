@@ -1,24 +1,14 @@
-on: [push]
-
+---
 name: CI
-
+on: [push, pull_request]
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          override: true
-          components: rustfmt, clippy
-
-      # `cargo check` command here will use installed `nightly`
-      # as it is set as an "override" for current directory
-
-      - name: Run cargo check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
+  rust:
+    uses: lpenz/ghworkflow-rust/.github/workflows/rust.yml@v0.23.3
+    with:
+      coveralls: true
+      codecov: true
+      deb: true
+      publish_packagecloud_repository: |
+        ["debian/debian/bookworm", "ubuntu/ubuntu/jammy"]
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
