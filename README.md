@@ -77,3 +77,22 @@ brew install just
 # Run tests
 just test
 ```
+
+## Configuration
+
+`merka-vault` can be configured using environment variables or a configuration file. Here are some common configurations:
+
+- `VAULT_ADDR`: The address of the Vault server.
+- `VAULT_TOKEN`: The root token for Vault.
+
+## Contributing
+
+We welcome contributions! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute.
+
+## License
+
+This project is licensed under either the MIT or Apache 2.0 license, at your option. See the [LICENSE](LICENSE) file for details.
+
+## Code of Conduct
+
+Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
