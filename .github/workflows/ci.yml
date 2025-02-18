@@ -4,6 +4,9 @@ on: [push, pull_request]
 jobs:
   rust:
     uses: lpenz/ghworkflow-rust/.github/workflows/rust.yml@v0.23.3
+    permissions:
+      contents: read
+      issues: write
     with:
       coveralls: true
       codecov: true
