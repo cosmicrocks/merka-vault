@@ -60,7 +60,7 @@ jobs:
             publish \
             --workspace \
             --all-features \
-            --allow-branch main \
+            --allow-branch HEAD \
             --no-confirm \
             --no-verify \
             --execute
