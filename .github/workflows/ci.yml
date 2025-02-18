@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 jobs:
   rust:
-    uses: esomore/ghworkflow-rust/.github/workflows/rust.yml@esomore-fix-codecov-action
+    uses: esomore/ghworkflow-rust/.github/workflows/rust.yml@main
     permissions:
       contents: read
       issues: write
