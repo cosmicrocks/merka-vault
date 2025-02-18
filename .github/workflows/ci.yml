@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 jobs:
   rust:
-    uses: esomore/ghworkflow-rust/.github/workflows/rust.yml@esomore-fix-codecov-action
+    uses: esomore/ghworkflow-rust/.github/workflows/rust.yml@main
     permissions:
       contents: read
       issues: write
@@ -14,3 +14,4 @@ jobs:
       publish_github_release: true
     secrets:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
