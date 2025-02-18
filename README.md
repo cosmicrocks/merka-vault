@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/merka-vault.svg)](https://crates.io/crates/merka-vault)
 [![Docs.rs](https://docs.rs/merka-vault/badge.svg)](https://docs.rs/merka-vault)
-[![CI](https://github.com/merka-org/merka-vault/actions/workflows/ci.yaml/badge.svg)](https://github.com/merka-org/merka-vault/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/cosmicrocks/merka-vault/ci.yml?branch=main)](https://github.com/merka-org/merka-vault/actions)
 [![License: MIT or Apache 2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 
 **merka-vault** is a Rust library and CLI for bootstrapping HashiCorp Vault. It automates Vault server initialization (seal/unseal process), configures a PKI secrets engine, and sets up authentication methods (Token, AppRole, Kubernetes). It is designed to be integrated with the `merka-core` actor framework, but can also be used as a standalone command-line tool.
