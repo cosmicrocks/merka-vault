@@ -1,4 +1,3 @@
-// src/main.rs
 use clap::{Parser, Subcommand};
 use merka_vault2::vault;
 
@@ -26,30 +25,30 @@ struct Cli {
 enum Commands {
     /// Initialize a new Vault and generate unseal keys
     Init {
-        /// Number of key shares to split the master key into
         #[arg(long, default_value_t = 1)]
         secret_shares: u8,
-        /// Number of key shares required to unseal
         #[arg(long, default_value_t = 1)]
         secret_threshold: u8,
     },
     /// Unseal the Vault with provided key shares
     Unseal {
-        /// Unseal keys (provide all keys required by the threshold)
         #[arg(long = "key", value_name = "UNSEAL_KEY", required = true)]
         keys: Vec<String>,
     },
-    /// Set up the PKI secrets engine (generate a root CA and default role)
+    /// Set up the PKI secrets engine (root and/or intermediate)
     SetupPki {
-        /// Vault root token for authentication (from init)
         #[arg(long, env = "VAULT_TOKEN")]
         token: String,
-        /// Common Name for the root certificate (e.g., domain name)
         #[arg(long)]
         domain: String,
-        /// TTL for certificates (e.g., "8760h" for one year)
         #[arg(long, default_value = "8760h")]
         ttl: String,
+        #[arg(long)]
+        intermediate: bool,
+        #[arg(long, requires = "int_token")]
+        int_vault_addr: Option<String>,
+        #[arg(long, requires = "int_vault_addr")]
+        int_token: Option<String>,
     },
     /// Set up authentication backends (AppRole, Kubernetes)
     Auth {
@@ -60,7 +59,6 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum AuthMethod {
-    /// Configure AppRole auth method and create a new AppRole
     AppRole {
         #[arg(long, env = "VAULT_TOKEN")]
         token: String,
@@ -74,7 +72,6 @@ enum AuthMethod {
         )]
         policies: Vec<String>,
     },
-    /// Configure Kubernetes auth method and bind a Service Account
     Kubernetes {
         #[arg(long, env = "VAULT_TOKEN")]
         token: String,
@@ -101,19 +98,17 @@ async fn main() -> anyhow::Result<()> {
             secret_shares,
             secret_threshold,
         } => {
-            // Initialize Vault
             let init_result = vault::init_vault(&addr, secret_shares, secret_threshold).await;
             match init_result {
                 Ok(res) => {
                     println!("Vault initialized successfully!");
                     println!("Root Token: {}", res.root_token);
-                    // For security, consider not printing unseal keys in real use, but here we show them:
                     println!(
                         "Unseal Keys ({}/{} needed):",
                         res.keys.len(),
                         secret_threshold
                     );
-                    for key in &res.keys {
+                    for key in res.keys {
                         println!(" - {}", key);
                     }
                 }
@@ -123,23 +118,42 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Unseal { keys } => {
-            let result = vault::unseal_vault(&addr, &keys).await;
-            match result {
-                Ok(_) => {
-                    println!("Vault unsealed successfully!");
-                }
-                Err(err) => {
-                    eprintln!("Error unsealing Vault: {}", err);
-                    std::process::exit(1);
-                }
+        Commands::Unseal { keys } => match vault::unseal_vault(&addr, &keys).await {
+            Ok(_) => println!("Vault unsealed successfully!"),
+            Err(err) => {
+                eprintln!("Error unsealing Vault: {}", err);
+                std::process::exit(1);
             }
-        }
-        Commands::SetupPki { token, domain, ttl } => {
-            let result = vault::setup_pki(&addr, &token, &domain, &ttl).await;
+        },
+        Commands::SetupPki {
+            token,
+            domain,
+            ttl,
+            intermediate,
+            int_vault_addr,
+            int_token,
+        } => {
+            let use_int = intermediate || int_vault_addr.is_some();
+            let result = vault::setup_pki(
+                &addr,
+                &token,
+                &domain,
+                &ttl,
+                use_int,
+                int_vault_addr.as_deref(),
+                int_token.as_deref(),
+            )
+            .await;
             match result {
                 Ok((cert, role_name)) => {
-                    println!("PKI engine configured. CA Certificate:\n{}", cert);
+                    if use_int {
+                        println!(
+                            "Root and intermediate PKI configured. CA certificate chain:\n{}",
+                            cert
+                        );
+                    } else {
+                        println!("PKI engine configured. CA Certificate:\n{}", cert);
+                    }
                     println!("PKI role '{}' created for domain '{}'.", role_name, domain);
                 }
                 Err(err) => {
@@ -187,8 +201,10 @@ async fn main() -> anyhow::Result<()> {
                 .await;
                 match result {
                     Ok(_) => {
-                        println!("Kubernetes auth configured. Role '{}' mapped to service account '{}:{}'.",
-                                     role_name, namespace, service_account);
+                        println!(
+                            "Kubernetes auth configured. Role '{}' mapped to service account '{}:{}'.",
+                            role_name, namespace, service_account
+                        );
                     }
                     Err(err) => {
                         eprintln!("Error setting up Kubernetes auth: {}", err);
@@ -198,6 +214,5 @@ async fn main() -> anyhow::Result<()> {
             }
         },
     }
-
     Ok(())
 }

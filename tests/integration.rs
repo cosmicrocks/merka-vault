@@ -1,10 +1,4 @@
-//! Integration tests for merka-vault using Testcontainers.
-//!
-//! These tests use the shared Vault fixture defined in `tests/common.rs`.
-//! They exercise the PKI and AppRole setup functions from the merka-vault library.
-//!
 mod common;
-
 use common::{setup_vault_container, setup_vault_dev_container};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -12,31 +6,97 @@ use tokio::time::sleep;
 #[tokio::test]
 async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
     let vault_container = setup_vault_dev_container().await;
-
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+    let vault_url = format!("http://{}:{}", host, host_port);
 
-    let vault_url = format!(
-        "http://{host}:{host_port}",
-        host = host,
-        host_port = host_port
-    );
-
-    // Give Vault a few seconds to be extra sure it is ready.
     sleep(Duration::from_secs(3)).await;
 
-    // Call the PKI setup function from your library.
     let domain = "example.com";
     let ttl = "8760h";
-    let (cert, role_name) = merka_vault2::vault::setup_pki(&vault_url, "root", domain, ttl).await?;
+    let (cert, role_name) =
+        merka_vault2::vault::setup_pki(&vault_url, "root", domain, ttl, false, None, None).await?;
 
     println!("CA Certificate:\n{}", cert);
     println!("PKI role name: {}", role_name);
 
-    // Verify that the returned certificate contains the PEM header.
     assert!(cert.contains("BEGIN CERTIFICATE"));
-    // The role name should be the domain with dots replaced by hyphens.
     assert_eq!(role_name, domain.replace('.', "-"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_setup_pki_same_vault_intermediate() -> Result<(), Box<dyn std::error::Error>> {
+    let vault_container = setup_vault_dev_container().await;
+    let host = vault_container.get_host().await.unwrap();
+    let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+    let vault_url = format!("http://{}:{}", host, host_port);
+
+    sleep(Duration::from_secs(3)).await;
+
+    let domain = "example.com";
+    let ttl = "8760h";
+    let (cert_chain, role_name) =
+        merka_vault2::vault::setup_pki(&vault_url, "root", domain, ttl, true, None, None).await?;
+
+    println!("CA Certificate Chain:\n{}", cert_chain);
+    println!("PKI role name: {}", role_name);
+
+    assert!(cert_chain.contains("BEGIN CERTIFICATE"));
+    let cert_count = cert_chain.matches("BEGIN CERTIFICATE").count();
+    assert!(cert_count >= 2);
+    assert_eq!(role_name, domain.replace('.', "-"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std::error::Error>> {
+    // Start two Vault containers using the non‑dev setup.
+    let root_vault_container = setup_vault_container().await;
+    let int_vault_container = setup_vault_container().await;
+    let root_host = root_vault_container.get_host().await.unwrap();
+    let root_port = root_vault_container.get_host_port_ipv4(8200).await.unwrap();
+    let int_host = int_vault_container.get_host().await.unwrap();
+    let int_port = int_vault_container.get_host_port_ipv4(8200).await.unwrap();
+    let root_url = format!("http://{}:{}", root_host, root_port);
+    let int_url = format!("http://{}:{}", int_host, int_port);
+
+    // Allow containers to start up.
+    sleep(Duration::from_secs(3)).await;
+
+    // Initialize and unseal the root Vault.
+    let init_res = merka_vault2::vault::init_vault(&root_url, 5, 3).await?;
+    assert!(!init_res.root_token.is_empty());
+    merka_vault2::vault::unseal_vault(&root_url, &init_res.keys).await?;
+    let root_token = init_res.root_token;
+
+    // Initialize and unseal the intermediate Vault.
+    let int_init_res = merka_vault2::vault::init_vault(&int_url, 5, 3).await?;
+    assert!(!int_init_res.root_token.is_empty());
+    merka_vault2::vault::unseal_vault(&int_url, &int_init_res.keys).await?;
+    let int_root_token = int_init_res.root_token; // Use this token for intermediate Vault operations
+
+    let domain = "example.com";
+    let ttl = "8760h";
+    let (cert_chain, role_name) = merka_vault2::vault::setup_pki_intermediate(
+        &root_url,
+        &root_token,
+        &int_url,
+        &int_root_token,
+        domain,
+        ttl,
+    )
+    .await?;
+
+    println!("CA Certificate Chain:\n{}", cert_chain);
+    println!("PKI role name: {}", role_name);
+
+    assert!(cert_chain.contains("BEGIN CERTIFICATE"));
+    let cert_count = cert_chain.matches("BEGIN CERTIFICATE").count();
+    assert!(cert_count >= 2);
+    assert_eq!(role_name, format!("{}-int", domain.replace('.', "-")));
 
     Ok(())
 }
@@ -46,15 +106,10 @@ async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
     let vault_container = setup_vault_dev_container().await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
-    let vault_url = format!(
-        "http://{host}:{host_port}",
-        host = host,
-        host_port = host_port
-    );
+    let vault_url = format!("http://{}:{}", host, host_port);
 
     sleep(Duration::from_secs(3)).await;
 
-    // Test the AppRole setup.
     let role_name = "test-role";
     let policies = vec!["default".to_string()];
     let creds =
@@ -64,7 +119,6 @@ async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
         "AppRole credentials: role_id: {}, secret_id: {}",
         creds.role_id, creds.secret_id
     );
-    // Verify that non‑empty RoleID and SecretID are returned.
     assert!(!creds.role_id.is_empty());
     assert!(!creds.secret_id.is_empty());
 
@@ -76,25 +130,13 @@ async fn test_vault_init_and_unseal() -> Result<(), Box<dyn std::error::Error>> 
     let vault_container = setup_vault_dev_container().await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
-    let vault_url = format!(
-        "http://{host}:{host_port}",
-        host = host,
-        host_port = host_port
-    );
+    let vault_url = format!("http://{}:{}", host, host_port);
 
     sleep(Duration::from_secs(3)).await;
 
-    // This test is mostly illustrative; in a real test, we'd run a Vault in uninitialized state and then:
-    // let init_res = merka_vault2::vault::init_vault(&vault_url, 1, 1).await.unwrap();
-    // assert!(!init_res.root_token.is_empty());
-    // merka_vault2::vault::unseal_vault(&vault_url, &init_res.keys).await.unwrap();
-    // Then verify Vault is unsealed, e.g., by calling a sys/health endpoint or using the root token to list mounts.
-    assert!(
-        merka_vault2::vault::init_vault(&vault_url, 1, 1)
-            .await
-            .is_err(),
-        "Init should fail on a dev server (already initialized)"
-    );
+    assert!(merka_vault2::vault::init_vault(&vault_url, 1, 1)
+        .await
+        .is_err());
 
     Ok(())
 }
@@ -104,22 +146,15 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
     let vault_container = setup_vault_dev_container().await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
-    let vault_url = format!(
-        "http://{host}:{host_port}",
-        host = host,
-        host_port = host_port
-    );
+    let vault_url = format!("http://{}:{}", host, host_port);
 
     sleep(Duration::from_secs(3)).await;
 
-    // Test PKI setup
     let domain = "example.com";
     let ttl = "8760h";
-    let (cert, role_name) = merka_vault2::vault::setup_pki(&vault_url, "root", domain, ttl).await?;
-    assert!(
-        cert.contains("BEGIN CERTIFICATE"),
-        "Should return a PEM certificate"
-    );
+    let (cert, role_name) =
+        merka_vault2::vault::setup_pki(&vault_url, "root", domain, ttl, false, None, None).await?;
+    assert!(cert.contains("BEGIN CERTIFICATE"));
     println!(
         "PKI setup complete: role '{}' for domain {}, CA cert length {}",
         role_name,
@@ -127,7 +162,6 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
         cert.len()
     );
 
-    // Test AppRole setup
     let role = "test-role";
     let policies = vec!["default".to_string()];
     let creds = merka_vault2::vault::setup_approle(&vault_url, "root", role, &policies).await?;
@@ -138,7 +172,6 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
         role, creds.role_id, creds.secret_id
     );
 
-    // Test Kubernetes auth setup
     let k8s_role = "test-k8s-role";
     let sa_name = "vault-auth";
     let ns = "default";
@@ -156,11 +189,7 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Kubernetes auth configured for role '{}'", k8s_role);
     }
-    assert!(
-        result.is_ok() || matches!(result, Err(merka_vault2::vault::VaultError::Api(_))),
-        "K8s setup should either succeed or produce Vault API error due to missing JWT"
-    );
-
+    assert!(result.is_ok() || matches!(result, Err(merka_vault2::vault::VaultError::Api(_))));
     Ok(())
 }
 
@@ -169,29 +198,21 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
     let vault_container = setup_vault_container().await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
-    let vault_url = format!(
-        "http://{host}:{host_port}",
-        host = host,
-        host_port = host_port
-    );
+    let vault_url = format!("http://{}:{}", host, host_port);
 
     sleep(Duration::from_secs(3)).await;
 
-    // Initialize and unseal Vault
     let init_res = merka_vault2::vault::init_vault(&vault_url, 1, 1).await?;
     assert!(!init_res.root_token.is_empty());
     merka_vault2::vault::unseal_vault(&vault_url, &init_res.keys).await?;
     let root_token = init_res.root_token;
 
-    // Test PKI setup
     let domain = "example.com";
     let ttl = "8760h";
     let (cert, role_name) =
-        merka_vault2::vault::setup_pki(&vault_url, &root_token, domain, ttl).await?;
-    assert!(
-        cert.contains("BEGIN CERTIFICATE"),
-        "Should return a PEM certificate"
-    );
+        merka_vault2::vault::setup_pki(&vault_url, &root_token, domain, ttl, false, None, None)
+            .await?;
+    assert!(cert.contains("BEGIN CERTIFICATE"));
     println!(
         "PKI setup complete: role '{}' for domain {}, CA cert length {}",
         role_name,
@@ -199,7 +220,6 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
         cert.len()
     );
 
-    // Test AppRole setup
     let role = "test-role";
     let policies = vec!["default".to_string()];
     let creds =
@@ -211,7 +231,6 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
         role, creds.role_id, creds.secret_id
     );
 
-    // Test Kubernetes auth setup
     let k8s_role = "test-k8s-role";
     let sa_name = "vault-auth";
     let ns = "default";
@@ -235,10 +254,6 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Kubernetes auth configured for role '{}'", k8s_role);
     }
-    assert!(
-        result.is_ok() || matches!(result, Err(merka_vault2::vault::VaultError::Api(_))),
-        "K8s setup should either succeed or produce Vault API error due to missing JWT"
-    );
-
+    assert!(result.is_ok() || matches!(result, Err(merka_vault2::vault::VaultError::Api(_))));
     Ok(())
 }
