@@ -1,57 +1,38 @@
+//! vault.rs – Module for configuring HashiCorp Vault via its REST API.
+
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::AppRoleCredentials;
-
-/// Custom error type for Vault operations
 #[derive(Debug, Error)]
 pub enum VaultError {
     #[error("HTTP request error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Vault API error: {0}")]
     Api(String),
-    #[error("Vault returned error status: {0}")]
+    #[error("Vault returned HTTP status: {0}")]
     HttpStatus(StatusCode),
-    #[error("Vault not initialized or sealed")]
-    NotInitialized,
 }
 
-/// Internal helper to check a Vault HTTP response for success or extract errors
-async fn check_response(resp: reqwest::Response) -> Result<Value, VaultError> {
-    let status = resp.status();
-    if status.is_success() {
-        if status == StatusCode::NO_CONTENT {
-            // No content (204) – return empty JSON object
-            return Ok(serde_json::json!({}));
-        }
-        // Parse JSON body
-        let json_val: Value = resp.json().await?;
-        Ok(json_val)
-    } else {
-        // Try to parse error message from Vault
-        let body = resp.text().await.unwrap_or_default();
-        if let Ok(val) = serde_json::from_str::<Value>(&body) {
-            if let Some(errors) = val.get("errors") {
-                if errors.is_array() && !errors.as_array().unwrap().is_empty() {
-                    if let Some(msg) = errors[0].as_str() {
-                        return Err(VaultError::Api(msg.to_string()));
-                    }
-                }
-            }
-        }
-        // Fallback to status code if no JSON error message
-        Err(VaultError::HttpStatus(status))
-    }
+pub struct InitResult {
+    pub root_token: String,
+    pub keys: Vec<String>,
 }
 
-/// Initialize a new Vault server (returns unseal keys and root token).
+pub struct AppRoleCredentials {
+    pub role_id: String,
+    pub secret_id: String,
+}
+
+/// ----------------------------
+/// Vault Initialization & Unseal
+/// ----------------------------
+
 pub async fn init_vault(
     addr: &str,
     secret_shares: u8,
     secret_threshold: u8,
-) -> Result<crate::actor::InitResult, VaultError> {
-    // Endpoint: POST /v1/sys/init
+) -> Result<InitResult, VaultError> {
     let url = format!("{}/v1/sys/init", addr);
     let payload = serde_json::json!({
         "secret_shares": secret_shares,
@@ -60,39 +41,35 @@ pub async fn init_vault(
     let client = Client::new();
     let resp = client.post(&url).json(&payload).send().await?;
     let json = check_response(resp).await?;
-    // Parse out root token and unseal keys
     let root_token = json
         .get("root_token")
         .and_then(|v| v.as_str())
-        .unwrap_or_default()
+        .unwrap_or("")
         .to_string();
-    // Vault may return keys in "keys_base64" (base64 encoded) or "keys"
     let keys_array = if json.get("keys_base64").is_some() {
         json["keys_base64"].as_array().unwrap()
     } else {
         json["keys"].as_array().unwrap()
     };
-    let keys: Vec<String> = keys_array
+    let keys = keys_array
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
-    Ok(crate::actor::InitResult { root_token, keys })
+    Ok(InitResult { root_token, keys })
 }
 
-/// Unseal the Vault by providing all necessary unseal keys.
 pub async fn unseal_vault(addr: &str, keys: &[String]) -> Result<(), VaultError> {
-    // Endpoint: POST /v1/sys/unseal (called multiple times until sealed=false)
     let url = format!("{}/v1/sys/unseal", addr);
     let client = Client::new();
     for (i, key) in keys.iter().enumerate() {
         let payload = serde_json::json!({ "key": key });
         let resp = client.post(&url).json(&payload).send().await?;
         let json = check_response(resp).await?;
-        // Check if Vault is unsealed now
-        if let Some(false) = json.get("sealed").and_then(|v| v.as_bool()) {
-            break;
+        if let Some(sealed) = json.get("sealed").and_then(|v| v.as_bool()) {
+            if !sealed {
+                break;
+            }
         }
-        // If we've provided all keys and it's still sealed, that's an error
         if i == keys.len() - 1 {
             return Err(VaultError::Api(
                 "Vault is still sealed after provided keys".into(),
@@ -102,74 +79,58 @@ pub async fn unseal_vault(addr: &str, keys: &[String]) -> Result<(), VaultError>
     Ok(())
 }
 
-/// Enable and configure the PKI secrets engine, generate a root CA, and create a role.
-/// Returns the root certificate (PEM) and the name of the role created.
-pub async fn setup_pki(
+/// ----------------------------
+/// PKI Setup
+/// ----------------------------
+
+/// Configures a Vault as the root PKI engine.
+pub async fn setup_pki_root(
     addr: &str,
     token: &str,
     common_name: &str,
     ttl: &str,
-) -> Result<(String, String), VaultError> {
+) -> Result<String, VaultError> {
     let client = Client::new();
-    // 1. Enable the PKI engine at path "pki"
-    let enable_url = format!("{}/v1/sys/mounts/pki", addr);
-    let payload = serde_json::json!({ "type": "pki" });
-    let resp = client
-        .post(&enable_url)
-        .bearer_auth(token)
-        .json(&payload)
-        .send()
-        .await?;
-    check_response(resp).await?; // expect 204 or empty JSON on success
 
-    // 2. Tune the max lease TTL for the PKI (e.g., 1 year)
+    // Mount and tune the PKI engine at "pki".
+    let mount_url = format!("{}/v1/sys/mounts/pki", addr);
+    auth_post(
+        &client,
+        token,
+        &mount_url,
+        serde_json::json!({ "type": "pki" }),
+    )
+    .await?;
     let tune_url = format!("{}/v1/sys/mounts/pki/tune", addr);
-    let tune_payload = serde_json::json!({ "max_lease_ttl": ttl });
-    let resp = client
-        .post(&tune_url)
-        .bearer_auth(token)
-        .json(&tune_payload)
-        .send()
-        .await?;
-    check_response(resp).await?; // 204 on success
+    auth_post(
+        &client,
+        token,
+        &tune_url,
+        serde_json::json!({ "max_lease_ttl": ttl }),
+    )
+    .await?;
 
-    // 3. Generate a self-signed internal root certificate
+    // Generate a self‑signed root certificate.
     let gen_url = format!("{}/v1/pki/root/generate/internal", addr);
     let gen_payload = serde_json::json!({ "common_name": common_name, "ttl": ttl });
-    let resp = client
-        .post(&gen_url)
-        .bearer_auth(token)
-        .json(&gen_payload)
-        .send()
-        .await?;
+    let resp = auth_post(&client, token, &gen_url, gen_payload).await?;
     let json = check_response(resp).await?;
-    // The generated certificate is usually under "data.certificate"
     let cert = json
         .get("data")
         .and_then(|d| d.get("certificate"))
-        .or_else(|| json.get("certificate"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    // 4. Configure certificate URLs (issuing cert and CRL distribution) for completeness
+    // Configure issuing and CRL URLs.
     let urls_url = format!("{}/v1/pki/config/urls", addr);
-    let issuing_urls = format!("{}/v1/pki/ca", addr);
-    let crl_urls = format!("{}/v1/pki/crl", addr);
     let urls_payload = serde_json::json!({
-        "issuing_certificates": issuing_urls,
-        "crl_distribution_points": crl_urls
+        "issuing_certificates": format!("{}/v1/pki/ca", addr),
+        "crl_distribution_points": format!("{}/v1/pki/crl", addr)
     });
-    let resp = client
-        .post(&urls_url)
-        .bearer_auth(token)
-        .json(&urls_payload)
-        .send()
-        .await?;
-    check_response(resp).await?; // 204 on success
+    auth_post(&client, token, &urls_url, urls_payload).await?;
 
-    // 5. Create a default role to allow issuing certificates for the common_name
-    // Role name derived from common_name (replace dots with hyphens)
+    // Create a role (role name is derived from the common name).
     let role_name = common_name.replace('.', "-");
     let role_url = format!("{}/v1/pki/roles/{}", addr, role_name);
     let role_payload = serde_json::json!({
@@ -177,19 +138,272 @@ pub async fn setup_pki(
         "allow_subdomains": true,
         "max_ttl": ttl
     });
-    let resp = client
-        .post(&role_url)
-        .bearer_auth(token)
-        .json(&role_payload)
-        .send()
-        .await?;
-    check_response(resp).await?; // 204 on success
+    auth_post(&client, token, &role_url, role_payload).await?;
 
-    Ok((cert, role_name))
+    Ok(cert)
 }
 
-/// Enable AppRole auth method and create a new AppRole with given policies.
-/// Returns the generated RoleID and SecretID for the AppRole.
+/// Configures an intermediate Vault using the root Vault to sign its CSR.
+/// Requires the intermediate Vault’s own token.
+pub async fn setup_pki_intermediate(
+    root_addr: &str,
+    root_token: &str,
+    int_addr: &str,
+    int_token: &str,
+    common_name: &str,
+    ttl: &str,
+) -> Result<(String, String), VaultError> {
+    let client = Client::new();
+
+    // Configure root Vault and get its certificate.
+    let root_cert = setup_pki_root(root_addr, root_token, common_name, ttl).await?;
+
+    // Configure the intermediate Vault.
+    let int_mount = "pki";
+    let int_mount_url = format!("{}/v1/sys/mounts/{}", int_addr, int_mount);
+    auth_post(
+        &client,
+        int_token,
+        &int_mount_url,
+        serde_json::json!({ "type": "pki" }),
+    )
+    .await?;
+    let int_tune_url = format!("{}/v1/sys/mounts/{}/tune", int_addr, int_mount);
+    auth_post(
+        &client,
+        int_token,
+        &int_tune_url,
+        serde_json::json!({ "max_lease_ttl": ttl }),
+    )
+    .await?;
+
+    // Generate a CSR on the intermediate Vault.
+    let csr_url = format!(
+        "{}/v1/{}/intermediate/generate/internal",
+        int_addr, int_mount
+    );
+    let csr_payload = serde_json::json!({ "common_name": common_name, "ttl": ttl });
+    let csr_resp = auth_post(&client, int_token, &csr_url, csr_payload).await?;
+    let csr_json = check_response(csr_resp).await?;
+    let csr = csr_json
+        .get("data")
+        .and_then(|d| d.get("csr"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Sign the intermediate CSR using the root Vault.
+    let sign_url = format!("{}/v1/pki/root/sign-intermediate", root_addr);
+    let sign_payload = serde_json::json!({
+        "csr": csr,
+        "common_name": common_name,
+        "ttl": ttl,
+        "format": "pem_bundle"
+    });
+    let sign_resp = auth_post(&client, root_token, &sign_url, sign_payload).await?;
+    let sign_json = check_response(sign_resp).await?;
+    let signed_cert = sign_json
+        .get("data")
+        .and_then(|d| d.get("certificate"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Set the signed certificate on the intermediate Vault.
+    let set_url = format!("{}/v1/{}/intermediate/set-signed", int_addr, int_mount);
+    auth_post(
+        &client,
+        int_token,
+        &set_url,
+        serde_json::json!({ "certificate": signed_cert }),
+    )
+    .await?;
+
+    // Configure URLs on the intermediate Vault.
+    let int_urls_url = format!("{}/v1/{}/config/urls", int_addr, int_mount);
+    let int_urls_payload = serde_json::json!({
+        "issuing_certificates": format!("{}/v1/{}/ca", int_addr, int_mount),
+        "crl_distribution_points": format!("{}/v1/{}/crl", int_addr, int_mount)
+    });
+    auth_post(&client, int_token, &int_urls_url, int_urls_payload).await?;
+
+    // Create a role on the intermediate Vault.
+    let role_name = format!("{}-int", common_name.replace('.', "-"));
+    let role_url = format!("{}/v1/{}/roles/{}", int_addr, int_mount, role_name);
+    let role_payload = serde_json::json!({
+        "allowed_domains": common_name,
+        "allow_subdomains": true,
+        "max_ttl": ttl
+    });
+    auth_post(&client, int_token, &role_url, role_payload).await?;
+
+    let cert_chain = format!("{}\n{}", signed_cert, root_cert);
+    Ok((cert_chain, role_name))
+}
+
+/// Configures a Vault in "same vault" mode using two mounts on the same server.
+pub async fn setup_pki_same_vault(
+    addr: &str,
+    token: &str,
+    common_name: &str,
+    ttl: &str,
+) -> Result<(String, String), VaultError> {
+    let client = Client::new();
+    let mount_root = "pki_root";
+    let mount_int = "pki";
+
+    // Configure the root mount.
+    let root_mount_url = format!("{}/v1/sys/mounts/{}", addr, mount_root);
+    auth_post(
+        &client,
+        token,
+        &root_mount_url,
+        serde_json::json!({ "type": "pki" }),
+    )
+    .await?;
+    let tune_root_url = format!("{}/v1/sys/mounts/{}/tune", addr, mount_root);
+    auth_post(
+        &client,
+        token,
+        &tune_root_url,
+        serde_json::json!({ "max_lease_ttl": ttl }),
+    )
+    .await?;
+    let root_url = format!("{}/v1/{}/root/generate/internal", addr, mount_root);
+    let root_payload = serde_json::json!({ "common_name": common_name, "ttl": ttl });
+    let root_resp = auth_post(&client, token, &root_url, root_payload).await?;
+    let root_json = check_response(root_resp).await?;
+    let root_cert = root_json
+        .get("data")
+        .and_then(|d| d.get("certificate"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let root_urls_url = format!("{}/v1/{}/config/urls", addr, mount_root);
+    auth_post(
+        &client,
+        token,
+        &root_urls_url,
+        serde_json::json!({
+            "issuing_certificates": format!("{}/v1/{}/ca", addr, mount_root),
+            "crl_distribution_points": format!("{}/v1/{}/crl", addr, mount_root)
+        }),
+    )
+    .await?;
+
+    // Configure the intermediate mount.
+    let int_mount_url = format!("{}/v1/sys/mounts/{}", addr, mount_int);
+    auth_post(
+        &client,
+        token,
+        &int_mount_url,
+        serde_json::json!({ "type": "pki" }),
+    )
+    .await?;
+    let tune_int_url = format!("{}/v1/sys/mounts/{}/tune", addr, mount_int);
+    auth_post(
+        &client,
+        token,
+        &tune_int_url,
+        serde_json::json!({ "max_lease_ttl": ttl }),
+    )
+    .await?;
+    let csr_url = format!("{}/v1/{}/intermediate/generate/internal", addr, mount_int);
+    let csr_payload = serde_json::json!({ "common_name": common_name, "ttl": ttl });
+    let csr_resp = auth_post(&client, token, &csr_url, csr_payload).await?;
+    let csr_json = check_response(csr_resp).await?;
+    let csr = csr_json
+        .get("data")
+        .and_then(|d| d.get("csr"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let sign_url = format!("{}/v1/{}/root/sign-intermediate", addr, mount_root);
+    let sign_payload = serde_json::json!({
+        "csr": csr,
+        "common_name": common_name,
+        "ttl": ttl,
+        "format": "pem_bundle"
+    });
+    let sign_resp = auth_post(&client, token, &sign_url, sign_payload).await?;
+    let sign_json = check_response(sign_resp).await?;
+    let signed_cert = sign_json
+        .get("data")
+        .and_then(|d| d.get("certificate"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let set_url = format!("{}/v1/{}/intermediate/set-signed", addr, mount_int);
+    auth_post(
+        &client,
+        token,
+        &set_url,
+        serde_json::json!({ "certificate": signed_cert }),
+    )
+    .await?;
+    let int_urls_url = format!("{}/v1/{}/config/urls", addr, mount_int);
+    auth_post(
+        &client,
+        token,
+        &int_urls_url,
+        serde_json::json!({
+            "issuing_certificates": format!("{}/v1/{}/ca", addr, mount_int),
+            "crl_distribution_points": format!("{}/v1/{}/crl", addr, mount_int)
+        }),
+    )
+    .await?;
+    let role_name = common_name.replace('.', "-");
+    let role_url = format!("{}/v1/{}/roles/{}", addr, mount_int, role_name);
+    auth_post(
+        &client,
+        token,
+        &role_url,
+        serde_json::json!({
+            "allowed_domains": common_name,
+            "allow_subdomains": true,
+            "max_ttl": ttl
+        }),
+    )
+    .await?;
+    let cert_chain = format!("{}\n{}", signed_cert, root_cert);
+    Ok((cert_chain, role_name))
+}
+
+/// Wrapper for PKI setup that matches the actor API.
+/// If `intermediate` is false, it uses root‑only setup.
+/// If true and an intermediate address is provided, it uses separate intermediate mode.
+/// Otherwise, it uses same‑vault mode.
+pub async fn setup_pki(
+    addr: &str,
+    token: &str,
+    common_name: &str,
+    ttl: &str,
+    intermediate: bool,
+    intermediate_addr: Option<&str>,
+    int_token: Option<&str>,
+) -> Result<(String, String), VaultError> {
+    if !intermediate {
+        let cert = setup_pki_root(addr, token, common_name, ttl).await?;
+        let role_name = common_name.replace('.', "-");
+        Ok((cert, role_name))
+    } else if let Some(int_addr) = intermediate_addr {
+        if let Some(itoken) = int_token {
+            setup_pki_intermediate(addr, token, int_addr, itoken, common_name, ttl).await
+        } else {
+            Err(VaultError::Api(
+                "Intermediate setup requires both address and token".into(),
+            ))
+        }
+    } else {
+        // same vault mode: no intermediate address provided.
+        setup_pki_same_vault(addr, token, common_name, ttl).await
+    }
+}
+
+/// ----------------------------
+/// AppRole and Kubernetes Auth
+/// ----------------------------
+
 pub async fn setup_approle(
     addr: &str,
     token: &str,
@@ -197,30 +411,23 @@ pub async fn setup_approle(
     policies: &[String],
 ) -> Result<AppRoleCredentials, VaultError> {
     let client = Client::new();
-    // 1. Enable the AppRole auth method at path "approle"
     let enable_url = format!("{}/v1/sys/auth/approle", addr);
     let enable_payload = serde_json::json!({ "type": "approle" });
-    let resp = client
+    client
         .post(&enable_url)
         .bearer_auth(token)
         .json(&enable_payload)
         .send()
         .await?;
-    check_response(resp).await?; // 204 on success (or 400 if already enabled)
-
-    // 2. Create the AppRole with specified policies
     let role_url = format!("{}/v1/auth/approle/role/{}", addr, role_name);
     let policies_str = policies.join(",");
     let role_payload = serde_json::json!({ "policies": policies_str });
-    let resp = client
+    client
         .post(&role_url)
         .bearer_auth(token)
         .json(&role_payload)
         .send()
         .await?;
-    check_response(resp).await?; // 204 on success
-
-    // 3. Fetch the RoleID
     let role_id_url = format!("{}/v1/auth/approle/role/{}/role-id", addr, role_name);
     let resp = client.get(&role_id_url).bearer_auth(token).send().await?;
     let json = check_response(resp).await?;
@@ -230,8 +437,6 @@ pub async fn setup_approle(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
-    // 4. Generate a new SecretID for the AppRole
     let secret_id_url = format!("{}/v1/auth/approle/role/{}/secret-id", addr, role_name);
     let resp = client
         .post(&secret_id_url)
@@ -245,11 +450,9 @@ pub async fn setup_approle(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
     Ok(AppRoleCredentials { role_id, secret_id })
 }
 
-/// Enable Kubernetes auth method and configure a role for a Kubernetes service account.
 pub async fn setup_kubernetes_auth(
     addr: &str,
     token: &str,
@@ -260,49 +463,78 @@ pub async fn setup_kubernetes_auth(
     kubernetes_ca_cert: &str,
 ) -> Result<(), VaultError> {
     let client = Client::new();
-    // 1. Enable the Kubernetes auth method at path "kubernetes"
     let enable_url = format!("{}/v1/sys/auth/kubernetes", addr);
     let enable_payload = serde_json::json!({ "type": "kubernetes" });
-    let resp = client
+    client
         .post(&enable_url)
         .bearer_auth(token)
         .json(&enable_payload)
         .send()
         .await?;
-    check_response(resp).await?; // 204 on success
-
-    // 2. Configure Vault's Kubernetes auth with the cluster endpoint and CA cert.
-    // (Note: A token_reviewer_jwt would normally be needed for Vault to authenticate with K8s.
-    // Here we assume Vault is running inside the cluster with its own SA token, or this is set via env.)
     let config_url = format!("{}/v1/auth/kubernetes/config", addr);
     let config_payload = serde_json::json!({
         "kubernetes_host": kubernetes_host,
         "kubernetes_ca_cert": kubernetes_ca_cert
-        // "token_reviewer_jwt": "<JWT>" // omitted for simplicity or assumed via environment
     });
-    let resp = client
+    client
         .post(&config_url)
         .bearer_auth(token)
         .json(&config_payload)
         .send()
         .await?;
-    check_response(resp).await?; // 204 on success (could error if JWT is required and missing)
-
-    // 3. Create a role binding a Kubernetes Service Account to Vault policies
     let role_url = format!("{}/v1/auth/kubernetes/role/{}", addr, role_name);
     let role_payload = serde_json::json!({
         "bound_service_account_names": service_account,
         "bound_service_account_namespaces": namespace,
-        "policies": "default",        // attach 'default' policy or any other existing policy
+        "policies": "default",
         "ttl": 3600
     });
-    let resp = client
+    client
         .post(&role_url)
         .bearer_auth(token)
         .json(&role_payload)
         .send()
         .await?;
-    check_response(resp).await?; // 204 on success
-
     Ok(())
+}
+
+/// ----------------------------
+/// Internal Helpers
+/// ----------------------------
+
+async fn check_response(resp: reqwest::Response) -> Result<Value, VaultError> {
+    let status = resp.status();
+    if status.is_success() {
+        if status == StatusCode::NO_CONTENT {
+            Ok(serde_json::json!({}))
+        } else {
+            Ok(resp.json().await?)
+        }
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        if let Ok(val) = serde_json::from_str::<Value>(&body) {
+            if let Some(errors) = val.get("errors").and_then(|v| v.as_array()) {
+                if !errors.is_empty() {
+                    if let Some(msg) = errors[0].as_str() {
+                        return Err(VaultError::Api(msg.to_string()));
+                    }
+                }
+            }
+        }
+        Err(VaultError::HttpStatus(status))
+    }
+}
+
+async fn auth_post(
+    client: &Client,
+    token: &str,
+    url: &str,
+    json_payload: Value,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .post(url)
+        .bearer_auth(token)
+        .json(&json_payload)
+        .send()
+        .await
 }

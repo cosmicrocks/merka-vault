@@ -8,4 +8,4 @@ pub mod actor;
 pub mod vault;
 
 pub use actor::VaultActor;
-pub use actor::{AppRoleCredentials, InitResult, PkiResult};
+pub use actor::{AppRoleCredentials, PkiResult};
