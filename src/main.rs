@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use merka_vault2::vault;
+use merka_vault::vault;
 
 #[derive(Parser)]
 #[command(

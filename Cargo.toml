@@ -1,5 +1,5 @@
 [package]
-name = "merka-vault2"
+name = "merka-vault"
 version = "0.1.7"
 edition = "2021"
 description = "Vault provisioning and management crate integrating with merka-core"
