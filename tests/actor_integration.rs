@@ -1,7 +1,7 @@
 // tests/actor_integration.rs
 
 use actix::Actor;
-use merka_vault2::actor::{InitVault, VaultActor};
+use merka_vault::actor::{InitVault, VaultActor};
 use tokio::time::{sleep, Duration};
 
 mod common;
