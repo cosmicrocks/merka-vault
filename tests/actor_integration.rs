@@ -9,7 +9,7 @@ mod common;
 #[actix_rt::test]
 async fn test_actor_init_message() -> Result<(), Box<dyn std::error::Error>> {
     // Start a Vault dev container using your common helper.
-    let vault_container = common::setup_vault_dev_container().await;
+    let vault_container = common::setup_vault_container(common::VaultMode::Dev).await;
     let host = vault_container.get_host().await.unwrap();
     let port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, port);
