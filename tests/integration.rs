@@ -1,11 +1,11 @@
 mod common;
-use common::{setup_vault_container, setup_vault_dev_container};
+use common::setup_vault_container;
 use std::time::Duration;
 use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_container = setup_vault_dev_container().await;
+    let vault_container = setup_vault_container(common::VaultMode::Dev).await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
@@ -28,7 +28,7 @@ async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_setup_pki_same_vault_intermediate() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_container = setup_vault_dev_container().await;
+    let vault_container = setup_vault_container(common::VaultMode::Dev).await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
@@ -54,8 +54,8 @@ async fn test_setup_pki_same_vault_intermediate() -> Result<(), Box<dyn std::err
 #[tokio::test]
 async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std::error::Error>> {
     // Start two Vault containers using the non‑dev setup.
-    let root_vault_container = setup_vault_container().await;
-    let int_vault_container = setup_vault_container().await;
+    let root_vault_container = setup_vault_container(common::VaultMode::Regular).await;
+    let int_vault_container = setup_vault_container(common::VaultMode::Regular).await;
     let root_host = root_vault_container.get_host().await.unwrap();
     let root_port = root_vault_container.get_host_port_ipv4(8200).await.unwrap();
     let int_host = int_vault_container.get_host().await.unwrap();
@@ -103,7 +103,7 @@ async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std
 
 #[tokio::test]
 async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_container = setup_vault_dev_container().await;
+    let vault_container = setup_vault_container(common::VaultMode::Dev).await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
@@ -126,7 +126,7 @@ async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_vault_init_and_unseal() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_container = setup_vault_dev_container().await;
+    let vault_container = setup_vault_container(common::VaultMode::Dev).await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
@@ -142,7 +142,7 @@ async fn test_vault_init_and_unseal() -> Result<(), Box<dyn std::error::Error>> 
 
 #[tokio::test]
 async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_container = setup_vault_dev_container().await;
+    let vault_container = setup_vault_container(common::VaultMode::Dev).await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
@@ -194,7 +194,7 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_container = setup_vault_container().await;
+    let vault_container = setup_vault_container(common::VaultMode::Regular).await;
     let host = vault_container.get_host().await.unwrap();
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
