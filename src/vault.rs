@@ -540,58 +540,6 @@ async fn auth_post(
         .await
 }
 
-/// Configures the ACME secrets engine on Vault.
-///
-/// This function mounts the ACME engine (if not already mounted) and sets the configuration,
-/// such as the email address and allowed domains. It returns Ok(()) if successful.
-pub async fn setup_acme(
-    addr: &str,
-    token: &str,
-    email: &str,
-    domains: &[String],
-) -> Result<(), VaultError> {
-    let client = reqwest::Client::new();
-
-    // Enable (mount) the ACME engine at "acme".
-    let acme_mount_url = format!("{}/v1/sys/mounts/acme", addr);
-    let mount_payload = serde_json::json!({
-        "type": "acme"
-    });
-    let mount_resp = client
-        .post(&acme_mount_url)
-        .bearer_auth(token)
-        .json(&mount_payload)
-        .send()
-        .await?;
-    if !mount_resp.status().is_success() {
-        return Err(VaultError::Api(format!(
-            "Failed to enable ACME engine: HTTP {}",
-            mount_resp.status()
-        )));
-    }
-
-    // Configure the ACME endpoint with the provided email and domains.
-    let acme_config_url = format!("{}/v1/acme/config", addr);
-    let config_payload = serde_json::json!({
-        "email": email,
-        "domains": domains,
-    });
-    let config_resp = client
-        .post(&acme_config_url)
-        .bearer_auth(token)
-        .json(&config_payload)
-        .send()
-        .await?;
-    if !config_resp.status().is_success() {
-        return Err(VaultError::Api(format!(
-            "Failed to configure ACME endpoint: HTTP {}",
-            config_resp.status()
-        )));
-    }
-
-    Ok(())
-}
-
 /// Issues a certificate from the PKI engine using the given role.
 /// It returns the full certificate chain (leaf plus intermediate/root certificates)
 /// along with the private key.
