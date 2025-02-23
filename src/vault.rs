@@ -233,6 +233,7 @@ pub async fn setup_pki_intermediate(
     let role_payload = serde_json::json!({
         "allowed_domains": common_name,
         "allow_subdomains": true,
+        "allow_bare_domains": true,
         "max_ttl": ttl
     });
     auth_post(&client, int_token, &role_url, role_payload).await?;
@@ -537,4 +538,136 @@ async fn auth_post(
         .json(&json_payload)
         .send()
         .await
+}
+
+/// Configures the ACME secrets engine on Vault.
+///
+/// This function mounts the ACME engine (if not already mounted) and sets the configuration,
+/// such as the email address and allowed domains. It returns Ok(()) if successful.
+pub async fn setup_acme(
+    addr: &str,
+    token: &str,
+    email: &str,
+    domains: &[String],
+) -> Result<(), VaultError> {
+    let client = reqwest::Client::new();
+
+    // Enable (mount) the ACME engine at "acme".
+    let acme_mount_url = format!("{}/v1/sys/mounts/acme", addr);
+    let mount_payload = serde_json::json!({
+        "type": "acme"
+    });
+    let mount_resp = client
+        .post(&acme_mount_url)
+        .bearer_auth(token)
+        .json(&mount_payload)
+        .send()
+        .await?;
+    if !mount_resp.status().is_success() {
+        return Err(VaultError::Api(format!(
+            "Failed to enable ACME engine: HTTP {}",
+            mount_resp.status()
+        )));
+    }
+
+    // Configure the ACME endpoint with the provided email and domains.
+    let acme_config_url = format!("{}/v1/acme/config", addr);
+    let config_payload = serde_json::json!({
+        "email": email,
+        "domains": domains,
+    });
+    let config_resp = client
+        .post(&acme_config_url)
+        .bearer_auth(token)
+        .json(&config_payload)
+        .send()
+        .await?;
+    if !config_resp.status().is_success() {
+        return Err(VaultError::Api(format!(
+            "Failed to configure ACME endpoint: HTTP {}",
+            config_resp.status()
+        )));
+    }
+
+    Ok(())
+}
+
+/// Issues a certificate from the PKI engine using the given role.
+/// It returns the full certificate chain (leaf plus intermediate/root certificates)
+/// along with the private key.
+///
+/// # Arguments
+///
+/// * `addr` - The Vault server address (e.g. "http://127.0.0.1:8200").
+/// * `token` - The Vault token with sufficient permissions.
+/// * `role_name` - The PKI role to use for issuing the certificate (e.g. "example-com-int").
+/// * `common_name` - The common name for the certificate (e.g. "example.com").
+///
+/// # Errors
+///
+/// Returns a `VaultError` if the HTTP request fails or if the response does not contain
+/// the expected certificate and key data.
+pub async fn issue_certificate(
+    addr: &str,
+    token: &str,
+    role_name: &str,
+    common_name: &str,
+    ttl: Option<&str>,
+) -> Result<(String, String), VaultError> {
+    // If no TTL is provided, use a default of "1h".
+    let default_ttl = ttl.unwrap_or("1h");
+    let url = format!("{}/v1/pki/issue/{}", addr, role_name);
+    let payload = serde_json::json!({
+        "common_name": common_name,
+        "ttl": default_ttl
+    });
+    let client = Client::new();
+    let resp = client
+        .post(&url)
+        .bearer_auth(token)
+        .json(&payload)
+        .send()
+        .await?;
+    let json = check_response(resp).await?;
+
+    // Get the leaf certificate.
+    let certificate = json
+        .get("data")
+        .and_then(|d| d.get("certificate"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| VaultError::Api("No certificate in response".into()))?
+        .to_string();
+
+    // Build a full certificate chain by concatenating chain certificates if available.
+    let full_chain = if let Some(ca_chain) = json
+        .get("data")
+        .and_then(|d| d.get("ca_chain"))
+        .and_then(|v| v.as_array())
+    {
+        let mut chain = certificate.clone();
+        for ca in ca_chain {
+            if let Some(ca_str) = ca.as_str() {
+                chain.push_str("\n");
+                chain.push_str(ca_str);
+            }
+        }
+        chain
+    } else if let Some(issuing_ca) = json
+        .get("data")
+        .and_then(|d| d.get("issuing_ca"))
+        .and_then(|v| v.as_str())
+    {
+        format!("{}\n{}", certificate, issuing_ca)
+    } else {
+        certificate.clone()
+    };
+
+    let issued_key = json
+        .get("data")
+        .and_then(|d| d.get("private_key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| VaultError::Api("No private key in response".into()))?
+        .to_string();
+
+    Ok((full_chain, issued_key))
 }
