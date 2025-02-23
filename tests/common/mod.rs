@@ -1,5 +1,5 @@
 use testcontainers::{
-    core::{IntoContainerPort, WaitFor},
+    core::{IntoContainerPort, Mount, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
@@ -41,4 +41,25 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
                 .unwrap()
         }
     }
+}
+
+/// Sets up a Caddy container using the provided configuration file.
+/// If `certs_dir` is provided, it sets up the container with TLS.
+pub async fn setup_caddy_container(
+    config_path: &str,
+    certs_dir: Option<&str>,
+) -> ContainerAsync<GenericImage> {
+    let mut image = GenericImage::new("caddy", "2.9.1")
+        .with_exposed_port(if certs_dir.is_some() { 8443 } else { 2015 }.tcp())
+        .with_mount(Mount::bind_mount(
+            config_path.to_string(),
+            "/etc/caddy/config.json".to_string(),
+        ))
+        .with_cmd(vec!["caddy", "run", "--config", "/etc/caddy/config.json"]);
+
+    if let Some(certs) = certs_dir {
+        image = image.with_mount(Mount::bind_mount(certs.to_string(), "/certs".to_string()));
+    }
+
+    image.start().await.unwrap()
 }
