@@ -15,7 +15,8 @@ async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
     let domain = "example.com";
     let ttl = "8760h";
     let (cert, role_name) =
-        merka_vault::vault::setup_pki(&vault_url, "root", domain, ttl, false, None, None).await?;
+        merka_vault::vault::pki::setup_pki(&vault_url, "root", domain, ttl, false, None, None)
+            .await?;
 
     println!("CA Certificate:\n{}", cert);
     println!("PKI role name: {}", role_name);
@@ -38,7 +39,8 @@ async fn test_setup_pki_same_vault_intermediate() -> Result<(), Box<dyn std::err
     let domain = "example.com";
     let ttl = "8760h";
     let (cert_chain, role_name) =
-        merka_vault::vault::setup_pki(&vault_url, "root", domain, ttl, true, None, None).await?;
+        merka_vault::vault::pki::setup_pki(&vault_url, "root", domain, ttl, true, None, None)
+            .await?;
 
     println!("CA Certificate Chain:\n{}", cert_chain);
     println!("PKI role name: {}", role_name);
@@ -67,20 +69,20 @@ async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std
     sleep(Duration::from_secs(3)).await;
 
     // Initialize and unseal the root Vault.
-    let init_res = merka_vault::vault::init_vault(&root_url, 5, 3).await?;
+    let init_res = merka_vault::vault::init::init_vault(&root_url, 5, 3).await?;
     assert!(!init_res.root_token.is_empty());
-    merka_vault::vault::unseal_vault(&root_url, &init_res.keys).await?;
+    merka_vault::vault::init::unseal_vault(&root_url, &init_res.keys).await?;
     let root_token = init_res.root_token;
 
     // Initialize and unseal the intermediate Vault.
-    let int_init_res = merka_vault::vault::init_vault(&int_url, 5, 3).await?;
+    let int_init_res = merka_vault::vault::init::init_vault(&int_url, 5, 3).await?;
     assert!(!int_init_res.root_token.is_empty());
-    merka_vault::vault::unseal_vault(&int_url, &int_init_res.keys).await?;
+    merka_vault::vault::init::unseal_vault(&int_url, &int_init_res.keys).await?;
     let int_root_token = int_init_res.root_token; // Use this token for intermediate Vault operations
 
     let domain = "example.com";
     let ttl = "8760h";
-    let (cert_chain, role_name) = merka_vault::vault::setup_pki_intermediate(
+    let (cert_chain, role_name) = merka_vault::vault::pki::setup_pki_intermediate(
         &root_url,
         &root_token,
         &int_url,
@@ -112,7 +114,8 @@ async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
 
     let role_name = "test-role";
     let policies = vec!["default".to_string()];
-    let creds = merka_vault::vault::setup_approle(&vault_url, "root", role_name, &policies).await?;
+    let creds =
+        merka_vault::vault::auth::setup_approle(&vault_url, "root", role_name, &policies).await?;
 
     println!(
         "AppRole credentials: role_id: {}, secret_id: {}",
@@ -133,7 +136,7 @@ async fn test_vault_init_and_unseal() -> Result<(), Box<dyn std::error::Error>> 
 
     sleep(Duration::from_secs(3)).await;
 
-    assert!(merka_vault::vault::init_vault(&vault_url, 1, 1)
+    assert!(merka_vault::vault::init::init_vault(&vault_url, 1, 1)
         .await
         .is_err());
 
@@ -152,7 +155,8 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
     let domain = "example.com";
     let ttl = "8760h";
     let (cert, role_name) =
-        merka_vault::vault::setup_pki(&vault_url, "root", domain, ttl, false, None, None).await?;
+        merka_vault::vault::pki::setup_pki(&vault_url, "root", domain, ttl, false, None, None)
+            .await?;
     assert!(cert.contains("BEGIN CERTIFICATE"));
     println!(
         "PKI setup complete: role '{}' for domain {}, CA cert length {}",
@@ -163,7 +167,8 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
 
     let role = "test-role";
     let policies = vec!["default".to_string()];
-    let creds = merka_vault::vault::setup_approle(&vault_url, "root", role, &policies).await?;
+    let creds =
+        merka_vault::vault::auth::setup_approle(&vault_url, "root", role, &policies).await?;
     assert!(!creds.role_id.is_empty());
     assert!(!creds.secret_id.is_empty());
     println!(
@@ -176,7 +181,7 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
     let ns = "default";
     let k8s_host = "https://kubernetes.default.svc";
     let k8s_ca = "---BEGIN CERTIFICATE---\nMIIF...==\n-----END CERTIFICATE-----";
-    let result = merka_vault::vault::setup_kubernetes_auth(
+    let result = merka_vault::vault::auth::setup_kubernetes_auth(
         &vault_url, "root", k8s_role, sa_name, ns, k8s_host, k8s_ca,
     )
     .await;
@@ -201,15 +206,15 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
 
     sleep(Duration::from_secs(3)).await;
 
-    let init_res = merka_vault::vault::init_vault(&vault_url, 1, 1).await?;
+    let init_res = merka_vault::vault::init::init_vault(&vault_url, 1, 1).await?;
     assert!(!init_res.root_token.is_empty());
-    merka_vault::vault::unseal_vault(&vault_url, &init_res.keys).await?;
+    merka_vault::vault::init::unseal_vault(&vault_url, &init_res.keys).await?;
     let root_token = init_res.root_token;
 
     let domain = "example.com";
     let ttl = "8760h";
     let (cert, role_name) =
-        merka_vault::vault::setup_pki(&vault_url, &root_token, domain, ttl, false, None, None)
+        merka_vault::vault::pki::setup_pki(&vault_url, &root_token, domain, ttl, false, None, None)
             .await?;
     assert!(cert.contains("BEGIN CERTIFICATE"));
     println!(
@@ -221,7 +226,8 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
 
     let role = "test-role";
     let policies = vec!["default".to_string()];
-    let creds = merka_vault::vault::setup_approle(&vault_url, &root_token, role, &policies).await?;
+    let creds =
+        merka_vault::vault::auth::setup_approle(&vault_url, &root_token, role, &policies).await?;
     assert!(!creds.role_id.is_empty());
     assert!(!creds.secret_id.is_empty());
     println!(
@@ -234,7 +240,7 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
     let ns = "default";
     let k8s_host = "https://kubernetes.default.svc";
     let k8s_ca = "---BEGIN CERTIFICATE---\nMIIF...==\n-----END CERTIFICATE-----";
-    let result = merka_vault::vault::setup_kubernetes_auth(
+    let result = merka_vault::vault::auth::setup_kubernetes_auth(
         &vault_url,
         &root_token,
         k8s_role,
@@ -281,22 +287,22 @@ async fn test_issue_cert_and_verify_tls() -> Result<(), Box<dyn std::error::Erro
     sleep(Duration::from_secs(3)).await;
 
     // Initialize and unseal the root Vault.
-    let root_init = merka_vault::vault::init_vault(&root_url, 5, 3).await?;
+    let root_init = merka_vault::vault::init::init_vault(&root_url, 5, 3).await?;
     assert!(!root_init.root_token.is_empty());
-    merka_vault::vault::unseal_vault(&root_url, &root_init.keys).await?;
+    merka_vault::vault::init::unseal_vault(&root_url, &root_init.keys).await?;
     let root_token = root_init.root_token;
 
     // Initialize and unseal the intermediate Vault.
-    let int_init = merka_vault::vault::init_vault(&int_url, 5, 3).await?;
+    let int_init = merka_vault::vault::init::init_vault(&int_url, 5, 3).await?;
     assert!(!int_init.root_token.is_empty());
-    merka_vault::vault::unseal_vault(&int_url, &int_init.keys).await?;
+    merka_vault::vault::init::unseal_vault(&int_url, &int_init.keys).await?;
     let int_token = int_init.root_token;
 
     // Configure the PKI intermediate.
     // Here, we use a TTL of "24h" (used by issue_certificate as its default)
     let domain = "example.com";
     let ttl = "24h";
-    let (pki_chain, role_name) = merka_vault::vault::setup_pki_intermediate(
+    let (pki_chain, role_name) = merka_vault::vault::pki::setup_pki_intermediate(
         &root_url,
         &root_token,
         &int_url,
@@ -311,7 +317,7 @@ async fn test_issue_cert_and_verify_tls() -> Result<(), Box<dyn std::error::Erro
     assert!(cert_count >= 2);
 
     // --- Issue a Certificate from the Intermediate ---
-    let (issued_cert, issued_key) = merka_vault::vault::issue_certificate(
+    let (issued_cert, issued_key) = merka_vault::vault::pki::issue_certificate(
         &int_url,
         &int_token,
         &role_name,

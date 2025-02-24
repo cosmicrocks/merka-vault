@@ -99,7 +99,7 @@ pub async fn run_cli() -> Result<()> {
             secret_shares,
             secret_threshold,
         } => {
-            let init_result = vault::init_vault(&addr, secret_shares, secret_threshold).await;
+            let init_result = vault::init::init_vault(&addr, secret_shares, secret_threshold).await;
             match init_result {
                 Ok(res) => {
                     println!("Vault initialized successfully!");
@@ -119,7 +119,7 @@ pub async fn run_cli() -> Result<()> {
                 }
             }
         }
-        Commands::Unseal { keys } => match vault::unseal_vault(&addr, &keys).await {
+        Commands::Unseal { keys } => match vault::init::unseal_vault(&addr, &keys).await {
             Ok(_) => println!("Vault unsealed successfully!"),
             Err(err) => {
                 eprintln!("Error unsealing Vault: {}", err);
@@ -135,7 +135,7 @@ pub async fn run_cli() -> Result<()> {
             int_token,
         } => {
             let use_int = intermediate || int_vault_addr.is_some();
-            let result = vault::setup_pki(
+            let result = vault::pki::setup_pki(
                 &addr,
                 &token,
                 &domain,
@@ -169,7 +169,7 @@ pub async fn run_cli() -> Result<()> {
                 role_name,
                 policies,
             } => {
-                let result = vault::setup_approle(&addr, &token, &role_name, &policies).await;
+                let result = vault::auth::setup_approle(&addr, &token, &role_name, &policies).await;
                 match result {
                     Ok(creds) => {
                         println!("AppRole '{}' created.", role_name);
@@ -190,7 +190,7 @@ pub async fn run_cli() -> Result<()> {
                 kubernetes_host,
                 kubernetes_ca_cert,
             } => {
-                let result = vault::setup_kubernetes_auth(
+                let result = vault::auth::setup_kubernetes_auth(
                     &addr,
                     &token,
                     &role_name,
