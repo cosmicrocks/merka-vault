@@ -1,4 +1,7 @@
-//! PKI setup functions for Vault, including root and intermediate configurations as well as certificate issuance.
+//! PKI setup functions for Vault.
+//!
+//! This module provides functions to configure Vault as a root or intermediate PKI engine,
+//! issue certificates, and create roles. Each function documents its parameters and return value.
 
 use crate::vault::common::{auth_post, check_response};
 use crate::vault::VaultError;
@@ -6,6 +9,15 @@ use reqwest::Client;
 use serde_json::json;
 
 /// Configures Vault as a root PKI engine by mounting, tuning, and generating a self-signed certificate.
+///
+/// # Parameters
+/// - `addr`: Vault server address.
+/// - `token`: Authentication token.
+/// - `common_name`: The common name for the certificate.
+/// - `ttl`: Time-to-live for the certificate.
+///
+/// # Returns
+/// A certificate string on success.
 pub async fn setup_pki_root(
     addr: &str,
     token: &str,
@@ -53,7 +65,18 @@ pub async fn setup_pki_root(
     Ok(cert)
 }
 
-/// Configures an intermediate PKI engine by generating a CSR on the intermediate and signing it with the root.
+/// Configures an intermediate PKI engine by generating a CSR and signing it using the root.
+///
+/// # Parameters
+/// - `root_addr`: Address of the root Vault.
+/// - `root_token`: Token for the root Vault.
+/// - `int_addr`: Address of the intermediate Vault.
+/// - `int_token`: Token for the intermediate Vault.
+/// - `common_name`: Common name for the certificate.
+/// - `ttl`: Time-to-live for the certificate.
+///
+/// # Returns
+/// A tuple containing the certificate chain and the derived role name.
 pub async fn setup_pki_intermediate(
     root_addr: &str,
     root_token: &str,
@@ -146,6 +169,15 @@ pub async fn setup_pki_intermediate(
 }
 
 /// Configures PKI using two mounts on the same Vault server.
+///
+/// # Parameters
+/// - `addr`: Vault server address.
+/// - `token`: Authentication token.
+/// - `common_name`: The common name for the certificate.
+/// - `ttl`: Time-to-live for the certificate.
+///
+/// # Returns
+/// A tuple of the certificate chain and role name.
 pub async fn setup_pki_same_vault(
     addr: &str,
     token: &str,
@@ -262,9 +294,22 @@ pub async fn setup_pki_same_vault(
 }
 
 /// Wrapper for PKI setup that selects the correct mode.
+///
 /// - If `intermediate` is false, uses root‑only setup.
 /// - If true and an intermediate address is provided, uses separate intermediate mode.
 /// - Otherwise, uses same‑vault mode.
+///
+/// # Parameters
+/// - `addr`: Vault server address.
+/// - `token`: Authentication token.
+/// - `common_name`: Certificate common name.
+/// - `ttl`: Time-to-live for the certificate.
+/// - `intermediate`: Whether to use intermediate mode.
+/// - `intermediate_addr`: Optional address for the intermediate Vault.
+/// - `int_token`: Optional token for the intermediate Vault.
+///
+/// # Returns
+/// A tuple with the certificate (or chain) and the PKI role name.
 pub async fn setup_pki(
     addr: &str,
     token: &str,
@@ -292,7 +337,16 @@ pub async fn setup_pki(
 }
 
 /// Issues a certificate from the PKI engine using the specified role.
-/// Returns the full certificate chain and the private key.
+///
+/// # Parameters
+/// - `addr`: Vault server address.
+/// - `token`: Authentication token.
+/// - `role_name`: Role to use for issuing the certificate.
+/// - `common_name`: The common name for the certificate.
+/// - `ttl`: Optional time-to-live for the certificate; defaults to "1h" if not provided.
+///
+/// # Returns
+/// A tuple containing the full certificate chain and the private key.
 pub async fn issue_certificate(
     addr: &str,
     token: &str,

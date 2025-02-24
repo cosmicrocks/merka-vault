@@ -1,3 +1,8 @@
+//! Trait definitions for Vault operations.
+//!
+//! This module defines the `VaultOperations` trait that abstracts various Vault methods
+//! such as initialization, unsealing, PKI setup, and authentication configuration.
+
 use crate::vault::{InitResult, VaultError};
 use async_trait::async_trait;
 

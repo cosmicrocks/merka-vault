@@ -1,3 +1,8 @@
+//! Integration tests for the Vault provisioning application.
+//!
+//! These tests verify the setup of PKI engines, AppRole authentication,
+//! full Vault initialization/unsealing, and TLS certificate issuance.
+
 mod common;
 use common::setup_vault_container;
 use std::time::Duration;
