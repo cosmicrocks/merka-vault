@@ -92,7 +92,7 @@ impl Handler<InitVault> for VaultActor {
         let addr = self.vault_addr.clone();
         async move {
             let init_resp =
-                vault::init_vault(&addr, msg.secret_shares, msg.secret_threshold).await?;
+                vault::init::init_vault(&addr, msg.secret_shares, msg.secret_threshold).await?;
             Ok(InitResult {
                 root_token: init_resp.root_token,
                 keys: init_resp.keys,
@@ -106,7 +106,7 @@ impl Handler<UnsealVault> for VaultActor {
     type Result = ResponseFuture<Result<(), vault::VaultError>>;
     fn handle(&mut self, msg: UnsealVault, _ctx: &mut Context<Self>) -> Self::Result {
         let addr = self.vault_addr.clone();
-        async move { vault::unseal_vault(&addr, &msg.keys).await }.boxed_local()
+        async move { vault::init::unseal_vault(&addr, &msg.keys).await }.boxed_local()
     }
 }
 
@@ -124,7 +124,7 @@ impl Handler<SetupPki> for VaultActor {
         let int_addr = msg.intermediate_addr;
         let int_token = msg.int_token;
         async move {
-            let (cert, role_name) = vault::setup_pki(
+            let (cert, role_name) = vault::pki::setup_pki(
                 &addr,
                 &token,
                 &common_name,
@@ -154,7 +154,7 @@ impl Handler<SetupAppRole> for VaultActor {
         let role_name = msg.role_name;
         let policies = msg.policies;
         async move {
-            let creds = vault::setup_approle(&addr, &token, &role_name, &policies).await?;
+            let creds = vault::auth::setup_approle(&addr, &token, &role_name, &policies).await?;
             Ok(AppRoleCredentials {
                 role_id: creds.role_id,
                 secret_id: creds.secret_id,
@@ -178,7 +178,7 @@ impl Handler<SetupKubernetes> for VaultActor {
         let kubernetes_host = msg.kubernetes_host;
         let kubernetes_ca_cert = msg.kubernetes_ca_cert;
         async move {
-            vault::setup_kubernetes_auth(
+            vault::auth::setup_kubernetes_auth(
                 &addr,
                 &token,
                 &role_name,
