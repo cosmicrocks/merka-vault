@@ -1,12 +1,17 @@
+//! This module provides common utilities for setting up Vault and Caddy containers
+//! for integration testing.
+
 use testcontainers::{
     core::{IntoContainerPort, Mount, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
 
+/// Indicates the mode in which to run the Vault container.
+/// Use `Dev` for development mode with relaxed security and `Regular` for a production-like configuration.
+#[allow(dead_code)]
 pub enum VaultMode {
-    // TODO: understand why this is needed, Regular is being used in the tests
-    #[allow(dead_code)]
+    // Regular mode is closer to production usage.
     Regular,
     Dev,
 }

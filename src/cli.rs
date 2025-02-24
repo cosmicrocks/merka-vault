@@ -1,3 +1,8 @@
+//! Command-line interface for Vault provisioning.
+//!
+//! This file defines the CLI and its commands for initializing Vault,
+//! unsealing, PKI setup, and authentication configuration using Vault.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};

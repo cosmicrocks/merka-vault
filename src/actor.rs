@@ -1,4 +1,7 @@
-//! actor.rs – Actor integration for Vault operations.
+//! Integration of Vault operations with the Actix actor framework.
+//!
+//! This module defines the `VaultActor` which implements the `VaultOperations` trait
+//! and wraps Vault functionality into Actix messages for asynchronous processing.
 
 use crate::vault;
 use crate::vault::operations::VaultOperations;
@@ -6,13 +9,14 @@ use actix::prelude::*;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 
-/// Actor that manages Vault operations.
+/// Actor for managing Vault operations.
 pub struct VaultActor {
     pub vault_addr: String,
     pub root_token: Option<String>,
 }
 
 impl VaultActor {
+    /// Constructs a new VaultActor with the given Vault address.
     pub fn new(vault_addr: impl Into<String>) -> Self {
         Self {
             vault_addr: vault_addr.into(),

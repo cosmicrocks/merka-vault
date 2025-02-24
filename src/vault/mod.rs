@@ -1,5 +1,8 @@
-//! The `vault` module provides functions to initialize, configure PKI, and set up auth for HashiCorp Vault.
-//! It re-exports submodules for initialization, PKI, and auth functionality.
+//! The `vault` module provides functionality to initialize, configure PKI, and
+//! set up authentication for HashiCorp Vault.
+//!
+//! It re-exports submodules for initialization, PKI, and auth functionality,
+//! and defines common types and error variants used throughout the project.
 
 pub mod auth;
 pub mod init;
