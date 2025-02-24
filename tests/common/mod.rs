@@ -45,6 +45,7 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
 
 /// Sets up a Caddy container using the provided configuration file.
 /// If `certs_dir` is provided, it sets up the container with TLS.
+#[allow(dead_code)]
 pub async fn setup_caddy_container(
     config_path: &str,
     certs_dir: Option<&str>,

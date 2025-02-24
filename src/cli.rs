@@ -1,6 +1,90 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
-use merka_vault::vault;
+use merka_vault::vault::{self, operations::VaultOperations};
+
+pub struct VaultCli {
+    pub vault_addr: String,
+}
+
+#[async_trait]
+impl VaultOperations for VaultCli {
+    async fn init_vault(
+        &self,
+        secret_shares: u8,
+        secret_threshold: u8,
+    ) -> Result<vault::InitResult, vault::VaultError> {
+        vault::init::init_vault(&self.vault_addr, secret_shares, secret_threshold).await
+    }
+
+    async fn unseal_vault(&self, keys: &[String]) -> Result<(), vault::VaultError> {
+        vault::init::unseal_vault(&self.vault_addr, keys).await
+    }
+
+    async fn setup_pki(
+        &self,
+        token: &str,
+        domain: &str,
+        ttl: &str,
+        use_intermediate: bool,
+        int_addr: Option<&str>,
+        int_token: Option<&str>,
+    ) -> Result<(String, String), vault::VaultError> {
+        vault::pki::setup_pki(
+            &self.vault_addr,
+            token,
+            domain,
+            ttl,
+            use_intermediate,
+            int_addr,
+            int_token,
+        )
+        .await
+    }
+
+    async fn setup_approle(
+        &self,
+        token: &str,
+        role_name: &str,
+        policies: &[String],
+    ) -> Result<merka_vault::vault::AppRoleCredentials, vault::VaultError> {
+        vault::auth::setup_approle(&self.vault_addr, token, role_name, policies).await
+    }
+
+    async fn setup_kubernetes_auth(
+        &self,
+        token: &str,
+        role_name: &str,
+        service_account: &str,
+        namespace: &str,
+        kubernetes_host: &str,
+        kubernetes_ca_cert: &str,
+    ) -> Result<(), vault::VaultError> {
+        vault::auth::setup_kubernetes_auth(
+            &self.vault_addr,
+            token,
+            role_name,
+            service_account,
+            namespace,
+            kubernetes_host,
+            kubernetes_ca_cert,
+        )
+        .await
+    }
+
+    async fn issue_cert(
+        &self,
+        token: &str,
+        domain: &str,
+        common_name: &str,
+        ttl: &str,
+    ) -> Result<String, vault::VaultError> {
+        let (cert, _) =
+            vault::pki::issue_certificate(&self.vault_addr, token, domain, common_name, Some(ttl))
+                .await?;
+        Ok(cert)
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -93,13 +177,16 @@ pub enum AuthMethod {
 pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     let addr = cli.vault_addr;
+    let vault_cli = VaultCli {
+        vault_addr: addr.clone(),
+    };
 
     match cli.command {
         Commands::Init {
             secret_shares,
             secret_threshold,
         } => {
-            let init_result = vault::init::init_vault(&addr, secret_shares, secret_threshold).await;
+            let init_result = vault_cli.init_vault(secret_shares, secret_threshold).await;
             match init_result {
                 Ok(res) => {
                     println!("Vault initialized successfully!");
@@ -119,7 +206,7 @@ pub async fn run_cli() -> Result<()> {
                 }
             }
         }
-        Commands::Unseal { keys } => match vault::init::unseal_vault(&addr, &keys).await {
+        Commands::Unseal { keys } => match vault_cli.unseal_vault(&keys).await {
             Ok(_) => println!("Vault unsealed successfully!"),
             Err(err) => {
                 eprintln!("Error unsealing Vault: {}", err);
@@ -135,16 +222,16 @@ pub async fn run_cli() -> Result<()> {
             int_token,
         } => {
             let use_int = intermediate || int_vault_addr.is_some();
-            let result = vault::pki::setup_pki(
-                &addr,
-                &token,
-                &domain,
-                &ttl,
-                use_int,
-                int_vault_addr.as_deref(),
-                int_token.as_deref(),
-            )
-            .await;
+            let result = vault_cli
+                .setup_pki(
+                    &token,
+                    &domain,
+                    &ttl,
+                    use_int,
+                    int_vault_addr.as_deref(),
+                    int_token.as_deref(),
+                )
+                .await;
             match result {
                 Ok((cert, role_name)) => {
                     if use_int {
@@ -169,7 +256,7 @@ pub async fn run_cli() -> Result<()> {
                 role_name,
                 policies,
             } => {
-                let result = vault::auth::setup_approle(&addr, &token, &role_name, &policies).await;
+                let result = vault_cli.setup_approle(&token, &role_name, &policies).await;
                 match result {
                     Ok(creds) => {
                         println!("AppRole '{}' created.", role_name);
@@ -190,16 +277,16 @@ pub async fn run_cli() -> Result<()> {
                 kubernetes_host,
                 kubernetes_ca_cert,
             } => {
-                let result = vault::auth::setup_kubernetes_auth(
-                    &addr,
-                    &token,
-                    &role_name,
-                    &service_account,
-                    &namespace,
-                    &kubernetes_host,
-                    &kubernetes_ca_cert,
-                )
-                .await;
+                let result = vault_cli
+                    .setup_kubernetes_auth(
+                        &token,
+                        &role_name,
+                        &service_account,
+                        &namespace,
+                        &kubernetes_host,
+                        &kubernetes_ca_cert,
+                    )
+                    .await;
                 match result {
                     Ok(_) => {
                         println!(

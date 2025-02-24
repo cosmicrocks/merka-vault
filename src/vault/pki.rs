@@ -330,7 +330,7 @@ pub async fn issue_certificate(
         let mut chain = certificate.clone();
         for ca in ca_chain {
             if let Some(ca_str) = ca.as_str() {
-                chain.push_str("\n");
+                chain.push('\n');
                 chain.push_str(ca_str);
             }
         }
