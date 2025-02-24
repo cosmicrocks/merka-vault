@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod init;
+pub mod operations;
 pub mod pki;
 
 mod common; // Private helper functions.

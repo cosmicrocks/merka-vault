@@ -1,7 +1,9 @@
 //! actor.rs – Actor integration for Vault operations.
 
 use crate::vault;
+use crate::vault::operations::VaultOperations;
 use actix::prelude::*;
+use async_trait::async_trait;
 use futures_util::FutureExt;
 
 /// Actor that manages Vault operations.
@@ -190,5 +192,84 @@ impl Handler<SetupKubernetes> for VaultActor {
             .await
         }
         .boxed_local()
+    }
+}
+
+#[async_trait]
+impl VaultOperations for VaultActor {
+    async fn init_vault(
+        &self,
+        secret_shares: u8,
+        secret_threshold: u8,
+    ) -> Result<crate::vault::InitResult, crate::vault::VaultError> {
+        vault::init::init_vault(&self.vault_addr, secret_shares, secret_threshold).await
+    }
+
+    async fn unseal_vault(&self, keys: &[String]) -> Result<(), crate::vault::VaultError> {
+        vault::init::unseal_vault(&self.vault_addr, keys).await
+    }
+
+    async fn setup_pki(
+        &self,
+        token: &str,
+        domain: &str,
+        ttl: &str,
+        use_intermediate: bool,
+        int_addr: Option<&str>,
+        int_token: Option<&str>,
+    ) -> Result<(String, String), crate::vault::VaultError> {
+        vault::pki::setup_pki(
+            &self.vault_addr,
+            token,
+            domain,
+            ttl,
+            use_intermediate,
+            int_addr,
+            int_token,
+        )
+        .await
+    }
+
+    async fn setup_approle(
+        &self,
+        token: &str,
+        role_name: &str,
+        policies: &[String],
+    ) -> Result<vault::AppRoleCredentials, crate::vault::VaultError> {
+        vault::auth::setup_approle(&self.vault_addr, token, role_name, policies).await
+    }
+
+    async fn setup_kubernetes_auth(
+        &self,
+        token: &str,
+        role_name: &str,
+        service_account: &str,
+        namespace: &str,
+        kubernetes_host: &str,
+        kubernetes_ca_cert: &str,
+    ) -> Result<(), crate::vault::VaultError> {
+        vault::auth::setup_kubernetes_auth(
+            &self.vault_addr,
+            token,
+            role_name,
+            service_account,
+            namespace,
+            kubernetes_host,
+            kubernetes_ca_cert,
+        )
+        .await
+    }
+
+    async fn issue_cert(
+        &self,
+        token: &str,
+        domain: &str,
+        common_name: &str,
+        ttl: &str,
+    ) -> Result<String, crate::vault::VaultError> {
+        let (cert, _) =
+            vault::pki::issue_certificate(&self.vault_addr, token, domain, common_name, Some(ttl))
+                .await?;
+        Ok(cert)
     }
 }
