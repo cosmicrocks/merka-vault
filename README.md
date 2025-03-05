@@ -5,7 +5,7 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/cosmicrocks/merka-vault/ci.yml?branch=main)](https://github.com/cosmicrocks/merka-vault/actions)
 [![License: MIT or Apache 2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 
-**merka-vault** is a Rust library and CLI tool for bootstrapping HashiCorp Vault. It automates initialization (seal/unseal), configures a PKI secrets engine, and sets up various authentication methods. It integrates with the `merka-core` actor framework or works as a standalone tool.
+**merka-vault** is a Rust library and CLI tool for bootstrapping HashiCorp Vault. It automates initialization (seal/unseal), configures a PKI secrets engine, and sets up various authentication methods. It integrates with `merka-core` or works as a standalone tool.
 
 ## Features
 
