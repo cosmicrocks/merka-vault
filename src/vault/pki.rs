@@ -347,7 +347,7 @@ pub async fn setup_pki(
 ///
 /// # Returns
 /// A tuple containing the full certificate chain and the private key.
-pub async fn issue_certificate(
+pub async fn issue_certificateificate(
     addr: &str,
     token: &str,
     role_name: &str,
