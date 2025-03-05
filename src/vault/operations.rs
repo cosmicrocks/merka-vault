@@ -38,7 +38,7 @@ pub trait VaultOperations {
         kubernetes_host: &str,
         kubernetes_ca_cert: &str,
     ) -> Result<(), VaultError>;
-    async fn issue_cert(
+    async fn issue_certificate(
         &self,
         token: &str,
         domain: &str,

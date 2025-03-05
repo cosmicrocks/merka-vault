@@ -77,16 +77,21 @@ impl VaultOperations for VaultCli {
         .await
     }
 
-    async fn issue_cert(
+    async fn issue_certificate(
         &self,
         token: &str,
         domain: &str,
         common_name: &str,
         ttl: &str,
     ) -> Result<String, vault::VaultError> {
-        let (cert, _) =
-            vault::pki::issue_certificate(&self.vault_addr, token, domain, common_name, Some(ttl))
-                .await?;
+        let (cert, _) = vault::pki::issue_certificateificate(
+            &self.vault_addr,
+            token,
+            domain,
+            common_name,
+            Some(ttl),
+        )
+        .await?;
         Ok(cert)
     }
 }

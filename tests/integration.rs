@@ -268,7 +268,7 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn test_issue_cert_and_verify_tls() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_issue_certificate_and_verify_tls() -> Result<(), Box<dyn std::error::Error>> {
     use openssl::ssl::{SslConnector, SslMethod};
     use openssl::x509::store::X509StoreBuilder;
     use openssl::x509::X509StoreContext;
@@ -304,7 +304,7 @@ async fn test_issue_cert_and_verify_tls() -> Result<(), Box<dyn std::error::Erro
     let int_token = int_init.root_token;
 
     // Configure the PKI intermediate.
-    // Here, we use a TTL of "24h" (used by issue_certificate as its default)
+    // Here, we use a TTL of "24h" (used by issue_certificateificate as its default)
     let domain = "example.com";
     let ttl = "24h";
     let (pki_chain, role_name) = merka_vault::vault::pki::setup_pki_intermediate(
@@ -322,7 +322,7 @@ async fn test_issue_cert_and_verify_tls() -> Result<(), Box<dyn std::error::Erro
     assert!(cert_count >= 2);
 
     // --- Issue a Certificate from the Intermediate ---
-    let (issued_cert, issued_key) = merka_vault::vault::pki::issue_certificate(
+    let (issued_cert, issued_key) = merka_vault::vault::pki::issue_certificateificate(
         &int_url,
         &int_token,
         &role_name,
