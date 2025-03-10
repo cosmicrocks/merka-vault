@@ -41,6 +41,10 @@ merka-vault auth approle --role-name myapp --policies default,my-policy
 Example (macOS):
 
 ```sh
+
+# for private repos dependencies
+git config --global credential.helper osxkeychain
+
 # Install Rust
 curl https://sh.rustup.rs -sSf | sh
 
