@@ -1,5 +1,5 @@
 default:
-    @just --list
+  @just --list --unsorted --color=always
 
 # Run pre-commit hooks on all files, including autoformatting
 pre-commit-all:
