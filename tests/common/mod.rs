@@ -7,8 +7,6 @@ use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
 };
 
-use merka_k8s::k8s::*;
-
 /// Indicates the mode in which to run the Vault container.
 /// Use `Dev` for development mode with relaxed security and `Regular` for a production-like configuration.
 #[allow(dead_code)]

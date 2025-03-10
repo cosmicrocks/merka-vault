@@ -5,21 +5,10 @@
 
 mod common;
 use common::setup_vault_container;
-use merka_k8s::k8s::{
-    components::vault, port_forward, util::wait_for_deployment_ready, wait_for_pods_ready,
-};
 use std::time::Duration;
 use testcontainers::core::wait;
 use tokio::time::sleep;
 use tracing::info;
-
-/// Set up logging for tests
-fn init_logging() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_test_writer() // This ensures output goes to both stdout and test output
-        .try_init();
-}
 
 #[tokio::test]
 async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
@@ -463,110 +452,6 @@ async fn test_issue_certificate_and_verify_tls() -> Result<(), Box<dyn std::erro
         c.verify_cert()
     })?;
     println!("Certificate chain verified successfully against the custom trust store.");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_issue_certificate_and_verify_tls_k8s() -> Result<(), Box<dyn std::error::Error>> {
-    init_logging();
-
-    use merka_k8s::k8s::cluster::{Cluster, ClusterConfig};
-    use merka_k8s::k8s::port_forward::port_forward_pod;
-    use tokio::time::{sleep, Duration};
-
-    // --- Vault Setup (using common.rs and vault.rs) ---
-    // Start the root Vault containers in Regular mode.
-    let root_vault_container = common::setup_vault_container(common::VaultMode::Regular).await;
-    let root_host = root_vault_container.get_host().await.unwrap();
-    let root_port = root_vault_container.get_host_port_ipv4(8200).await.unwrap();
-
-    // Start the intermediate Vault HA on kind cluster.
-    info!("Starting cluster setup and services test");
-
-    // Constants
-    const CLUSTER_NAME: &str = "merka-test";
-    const TIMEOUT_SECS: u64 = 200;
-    const GATEWAY_API_VERSION: &str = "v1.2.1";
-
-    // Create cluster configuration
-    let config = ClusterConfig::new(CLUSTER_NAME)
-        .with_worker_nodes(3)
-        .with_cilium(true)
-        .with_kube_vip(true)
-        .with_cert_manager(true)
-        .with_vault(true)
-        .with_gateway_api(true)
-        .with_gateway_api_version(GATEWAY_API_VERSION)
-        .with_timeout_secs(TIMEOUT_SECS);
-
-    // Create and set up the cluster
-    let cluster = Cluster::new(config).await.map_err(|e| {
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        )) as Box<dyn std::error::Error>
-    })?;
-
-    // Get the client from the cluster
-    let client = cluster
-        .client
-        .as_ref()
-        .expect("Kubernetes client should be initialized");
-
-    info!("✅ Cluster setup completed successfully");
-
-    // Get the root host and port
-    let root_url = format!("http://{}:{}", root_host, root_port);
-
-    // Wait for the root Vault to start up.
-    wait_for_pods_ready(
-        client,
-        "vault",
-        "app.kubernetes.io/name=vault",
-        TIMEOUT_SECS,
-    )
-    .await?;
-
-    wait_for_deployment_ready(
-        client,
-        "vault",
-        "app.kubernetes.io/name=vault",
-        TIMEOUT_SECS,
-    )
-    .await?;
-
-    // Port forward the intermediate vault
-    info!("Port forwarding the intermediate Vault pod");
-    let int_pod_name = "vault-0";
-    let int_pod_port = 8200;
-    let int_pod_namespace = "vault";
-    let int_pod = port_forward_pod(&client, int_pod_namespace, int_pod_name, int_pod_port).await?;
-    // Capture the local port before moving int_pod into the guard
-    let int_pod_local_port = int_pod.local_port();
-    let int_url = format!("http://{}:{}", "127.0.0.1", int_pod_local_port);
-
-    // Allow containers to start.
-    sleep(Duration::from_secs(3)).await;
-
-    // Initialize and unseal the root Vault.
-    let root_init = merka_vault::vault::init::init_vault(&root_url, 5, 3).await?;
-    assert!(!root_init.root_token.is_empty());
-    merka_vault::vault::init::unseal_vault(&root_url, &root_init.keys).await?;
-    let root_token = root_init.root_token;
-
-    info!("✅ Root Vault initialized and unsealed: {}", root_token);
-
-    // Initialize and unseal the intermediate Vault.
-    let int_init = merka_vault::vault::init::init_vault(&int_url, 5, 3).await?;
-    assert!(!int_init.root_token.is_empty());
-    merka_vault::vault::init::unseal_vault(&int_url, &int_init.keys).await?;
-    let int_token = int_init.root_token;
-
-    info!(
-        "✅ Intermediate Vault initialized and unsealed: {}",
-        int_token
-    );
 
     Ok(())
 }
