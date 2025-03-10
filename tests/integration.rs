@@ -6,9 +6,7 @@
 mod common;
 use common::setup_vault_container;
 use std::time::Duration;
-use testcontainers::core::wait;
 use tokio::time::sleep;
-use tracing::info;
 
 #[tokio::test]
 async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
