@@ -6,6 +6,7 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
+use tracing::info;
 
 /// Set up logging for tests
 pub fn init_logging() {
@@ -22,6 +23,12 @@ pub enum VaultMode {
     // Regular mode is closer to production usage.
     Regular,
     Dev,
+    // Auto-unseal mode pre-configures Vault with transit auto-unseal
+    AutoUnseal {
+        unsealer_url: String,
+        token: String,
+        key_name: String,
+    },
 }
 
 pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericImage> {
@@ -47,6 +54,49 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
                 .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
                 .with_network("bridge")
                 .with_env_var("VAULT_LOCAL_CONFIG", vault_local_config)
+                .with_cmd(vec!["server"])
+                .with_cap_add("IPC_LOCK")
+                .start()
+                .await
+                .unwrap()
+        }
+        VaultMode::AutoUnseal {
+            unsealer_url,
+            token,
+            key_name,
+        } => {
+            let auto_unseal_config = format!(
+                r#"
+            {{
+                "storage": {{"file": {{"path": "/vault/file"}}}},
+                "listener": [{{"tcp": {{ "address": "0.0.0.0:8200", "tls_disable": true}}}}],
+                "seal": {{
+                    "transit": {{
+                        "address": "{}",
+                        "key_name": "{}",
+                        "mount_path": "transit/",
+                        "tls_skip_verify": true
+                    }}
+                }},
+                "default_lease_ttl": "168h",
+                "max_lease_ttl": "720h",
+                "ui": true
+            }}
+            "#,
+                unsealer_url, key_name
+            );
+
+            info!(
+                "Starting Vault with auto-unseal configuration connected to: {}",
+                unsealer_url
+            );
+
+            GenericImage::new("hashicorp/vault", "1.18.4")
+                .with_exposed_port(8200.tcp())
+                .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
+                .with_network("bridge")
+                .with_env_var("VAULT_LOCAL_CONFIG", auto_unseal_config)
+                .with_env_var("VAULT_TOKEN", token)
                 .with_cmd(vec!["server"])
                 .with_cap_add("IPC_LOCK")
                 .start()
