@@ -113,8 +113,6 @@ impl VaultClient {
             return Err(VaultError::HttpStatus(status.as_u16(), error_text));
         }
 
-        info!("Response: {:?}", response);
-
         // Return an empty JSON object for 204 No Content responses
         if status == reqwest::StatusCode::NO_CONTENT {
             return Ok(json!({}));
