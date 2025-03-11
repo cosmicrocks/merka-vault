@@ -26,7 +26,7 @@ pub async fn check_response(resp: Response) -> Result<Value, VaultError> {
                 }
             }
         }
-        Err(VaultError::HttpStatus(status))
+        Err(VaultError::HttpStatus(status.as_u16(), body))
     }
 }
 

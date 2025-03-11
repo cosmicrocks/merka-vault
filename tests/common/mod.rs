@@ -7,6 +7,14 @@ use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
 };
 
+/// Set up logging for tests
+pub fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .with_test_writer() // This ensures output goes to both stdout and test output
+        .try_init();
+}
+
 /// Indicates the mode in which to run the Vault container.
 /// Use `Dev` for development mode with relaxed security and `Regular` for a production-like configuration.
 #[allow(dead_code)]
