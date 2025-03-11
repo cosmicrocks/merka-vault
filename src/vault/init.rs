@@ -1,60 +1,143 @@
-//! Initialization and unseal functions for Vault.
+//! Vault initialization and unsealing operations.
+//!
+//! This module provides functions to initialize a new Vault server and
+//! unseal it for use.
 
-use crate::vault::common::check_response;
-use crate::vault::{InitResult, VaultError};
+use crate::vault::VaultError;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// Initializes Vault with the given secret shares and threshold.
-/// Returns an `InitResult` containing the root token and unseal keys.
+/// Request structure for Vault initialization.
+#[derive(Serialize)]
+struct InitRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_shares: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_threshold: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_shares: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_threshold: Option<u8>,
+}
+
+/// Response structure for Vault initialization.
+#[derive(Deserialize)]
+struct InitResponse {
+    #[serde(default)]
+    keys: Vec<String>,
+    #[serde(default)]
+    keys_base64: Vec<String>,
+    root_token: String,
+    #[serde(default)]
+    recovery_keys: Option<Vec<String>>,
+    #[serde(default)]
+    recovery_keys_base64: Option<Vec<String>>,
+}
+
+/// Response returned from Vault initialization.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct InitResult {
+    /// Unseal keys generated during initialization.
+    pub keys: Vec<String>,
+
+    /// Unseal keys in Base64 format.
+    pub keys_base64: Option<Vec<String>>,
+
+    /// Recovery keys, used in auto-unseal mode.
+    pub recovery_keys: Option<Vec<String>>,
+
+    /// Recovery keys in Base64 format.
+    pub recovery_keys_base64: Option<Vec<String>>,
+
+    /// Root token for the initialized Vault.
+    pub root_token: String,
+}
+
+/// Initializes a new Vault server.
+///
+/// # Arguments
+///
+/// * `addr` - The Vault server's URL.
+/// * `secret_shares` - Number of key shares to split the master key into.
+/// * `secret_threshold` - Number of key shares required to reconstruct the master key.
+/// * `recovery_shares` - Optional number of recovery key shares for auto-unseal setups.
+/// * `recovery_threshold` - Optional number of recovery key threshold for auto-unseal setups.
+///
+/// # Returns
+///
+/// A `Result` containing the root token and unseal keys on success, or a `VaultError` on failure.
 pub async fn init_vault(
     addr: &str,
     secret_shares: u8,
     secret_threshold: u8,
+    recovery_shares: Option<u8>,
+    recovery_threshold: Option<u8>,
 ) -> Result<InitResult, VaultError> {
-    let url = format!("{}/v1/sys/init", addr);
-    let payload = json!({
-        "secret_shares": secret_shares,
-        "secret_threshold": secret_threshold
-    });
     let client = Client::new();
-    let resp = client.post(&url).json(&payload).send().await?;
-    let json_resp = check_response(resp).await?;
-    let root_token = json_resp
-        .get("root_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let keys_array = if json_resp.get("keys_base64").is_some() {
-        json_resp["keys_base64"].as_array().unwrap()
-    } else {
-        json_resp["keys"].as_array().unwrap()
+    let req = InitRequest {
+        secret_shares: if recovery_shares.is_some() {
+            None
+        } else {
+            Some(secret_shares)
+        },
+        secret_threshold: if recovery_threshold.is_some() {
+            None
+        } else {
+            Some(secret_threshold)
+        },
+        recovery_shares,
+        recovery_threshold,
     };
-    let keys = keys_array
-        .iter()
-        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-        .collect();
-    Ok(InitResult { root_token, keys })
+    let req_url = format!("{}/v1/sys/init", addr);
+
+    let resp = client.put(&req_url).json(&req).send().await?;
+
+    if resp.status().is_success() {
+        let init_resp: InitResponse = resp.json().await?;
+        Ok(InitResult {
+            root_token: init_resp.root_token,
+            keys: init_resp.keys,
+            keys_base64: Some(init_resp.keys_base64),
+            recovery_keys: init_resp.recovery_keys,
+            recovery_keys_base64: init_resp.recovery_keys_base64,
+        })
+    } else {
+        Err(VaultError::ApiError(format!(
+            "Failed to initialize Vault: {}",
+            resp.text().await?
+        )))
+    }
 }
 
-/// Unseals the Vault by sending each unseal key until the server is unsealed.
+/// Unseals a Vault server.
+///
+/// # Arguments
+///
+/// * `addr` - The Vault server's URL.
+/// * `keys` - The unseal keys to use.
+///
+/// # Returns
+///
+/// A `Result` indicating success or containing a `VaultError` on failure.
 pub async fn unseal_vault(addr: &str, keys: &[String]) -> Result<(), VaultError> {
-    let url = format!("{}/v1/sys/unseal", addr);
     let client = Client::new();
-    for (i, key) in keys.iter().enumerate() {
-        let payload = json!({ "key": key });
-        let resp = client.post(&url).json(&payload).send().await?;
-        let json_resp = check_response(resp).await?;
-        if let Some(sealed) = json_resp.get("sealed").and_then(|v| v.as_bool()) {
-            if !sealed {
-                break;
-            }
-        }
-        if i == keys.len() - 1 {
-            return Err(VaultError::Api(
-                "Vault is still sealed after provided keys".into(),
-            ));
+    let req_url = format!("{}/v1/sys/unseal", addr);
+
+    for key in keys {
+        let resp = client
+            .put(&req_url)
+            .json(&json!({ "key": key }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(VaultError::ApiError(format!(
+                "Failed to unseal Vault: {}",
+                resp.text().await?
+            )));
         }
     }
+
     Ok(())
 }

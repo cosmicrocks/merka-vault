@@ -9,3 +9,11 @@ pub mod vault;
 
 pub use actor::VaultActor;
 pub use actor::{AppRoleCredentials, PkiResult};
+
+/// Initialize logging for the application
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .with_test_writer() // This ensures output goes to both stdout and test output
+        .try_init();
+}

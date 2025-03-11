@@ -1,38 +1,63 @@
-//! The `vault` module provides functionality to initialize, configure PKI, and
-//! set up authentication for HashiCorp Vault.
-//!
-//! It re-exports submodules for initialization, PKI, and auth functionality,
-//! and defines common types and error variants used throughout the project.
+//! Vault client library for managing and interacting with HashiCorp Vault.
 
 pub mod auth;
+pub mod autounseal;
+pub mod client;
+pub mod common;
 pub mod init;
 pub mod operations;
 pub mod pki;
+pub mod transit;
 
-mod common; // Private helper functions.
+// Re-export key types and traits for convenience
+pub use client::VaultClient;
+pub use init::InitResult;
+pub use operations::VaultOperations;
 
-use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Errors returned by Vault operations.
-#[derive(Debug, Error)]
+/// Error types for Vault operations.
+#[derive(Error, Debug)]
 pub enum VaultError {
-    #[error("HTTP request error: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("Vault API error: {0}")]
+    /// API error returned by Vault.
+    #[error("API error: {0}")]
     Api(String),
-    #[error("Vault returned HTTP status: {0}")]
-    HttpStatus(StatusCode),
+
+    /// API error returned by Vault with specific message.
+    #[error("API error: {0}")]
+    ApiError(String),
+
+    /// Network error during communication with Vault.
+    #[error("Network error: {0}")]
+    Network(String),
+
+    /// Error when parsing response from Vault.
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    /// Error constructing request to Vault.
+    #[error("Request error: {0}")]
+    RequestError(String),
+
+    /// HTTP status error response.
+    #[error("HTTP status {0}: {1}")]
+    HttpStatus(u16, String),
+
+    /// Error from the reqwest crate.
+    #[error("Reqwest error: {0}")]
+    Reqwest(#[from] reqwest::Error),
+
+    /// Error serializing or deserializing JSON.
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
-/// Result type for Vault initialization.
-pub struct InitResult {
-    pub root_token: String,
-    pub keys: Vec<String>,
-}
-
-/// Credentials returned from AppRole setup.
+/// Credentials for AppRole authentication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppRoleCredentials {
+    /// The role_id for AppRole authentication.
     pub role_id: String,
+    /// The secret_id for AppRole authentication.
     pub secret_id: String,
 }

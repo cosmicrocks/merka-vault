@@ -70,6 +70,30 @@ pub struct SetupKubernetes {
     pub kubernetes_ca_cert: String,
 }
 
+/// Message to request setting up transit auto-unseal
+#[derive(Message, Debug)]
+#[rtype(result = "Result<bool, vault::VaultError>")]
+pub struct SetupTransitAutoUnseal {
+    pub token: String,
+    pub key_name: String,
+}
+
+/// Message for generating a wrapped token for auto-unseal
+#[derive(Message, Debug)]
+#[rtype(result = "Result<String, vault::VaultError>")]
+pub struct GenerateWrappedToken {
+    pub token: String,
+    pub policy_name: String,
+    pub ttl: u32,
+}
+
+/// Message for unwrapping a token
+#[derive(Message, Debug)]
+#[rtype(result = "Result<String, vault::VaultError>")]
+pub struct UnwrapToken {
+    pub wrapped_token: String,
+}
+
 /// Data returned from Vault initialization.
 pub struct InitResult {
     pub root_token: String,
@@ -98,7 +122,8 @@ impl Handler<InitVault> for VaultActor {
         let addr = self.vault_addr.clone();
         async move {
             let init_resp =
-                vault::init::init_vault(&addr, msg.secret_shares, msg.secret_threshold).await?;
+                vault::init::init_vault(&addr, msg.secret_shares, msg.secret_threshold, None, None)
+                    .await?;
             Ok(InitResult {
                 root_token: init_resp.root_token,
                 keys: init_resp.keys,
@@ -199,6 +224,45 @@ impl Handler<SetupKubernetes> for VaultActor {
     }
 }
 
+impl Handler<SetupTransitAutoUnseal> for VaultActor {
+    type Result = ResponseFuture<Result<bool, vault::VaultError>>;
+
+    fn handle(&mut self, msg: SetupTransitAutoUnseal, _: &mut Self::Context) -> Self::Result {
+        let vault_url = self.vault_addr.clone();
+        Box::pin(async move {
+            vault::autounseal::setup_transit_autounseal(&vault_url, &msg.token, &msg.key_name).await
+        })
+    }
+}
+
+impl Handler<GenerateWrappedToken> for VaultActor {
+    type Result = ResponseFuture<Result<String, vault::VaultError>>;
+
+    fn handle(&mut self, msg: GenerateWrappedToken, _: &mut Self::Context) -> Self::Result {
+        let vault_url = self.vault_addr.clone();
+        Box::pin(async move {
+            vault::autounseal::generate_wrapped_transit_unseal_token(
+                &vault_url,
+                &msg.token,
+                &msg.policy_name,
+                msg.ttl,
+            )
+            .await
+        })
+    }
+}
+
+impl Handler<UnwrapToken> for VaultActor {
+    type Result = ResponseFuture<Result<String, vault::VaultError>>;
+
+    fn handle(&mut self, msg: UnwrapToken, _: &mut Self::Context) -> Self::Result {
+        let vault_url = self.vault_addr.clone();
+        Box::pin(
+            async move { vault::autounseal::unwrap_token(&vault_url, &msg.wrapped_token).await },
+        )
+    }
+}
+
 #[async_trait]
 impl VaultOperations for VaultActor {
     async fn init_vault(
@@ -206,7 +270,14 @@ impl VaultOperations for VaultActor {
         secret_shares: u8,
         secret_threshold: u8,
     ) -> Result<crate::vault::InitResult, crate::vault::VaultError> {
-        vault::init::init_vault(&self.vault_addr, secret_shares, secret_threshold).await
+        vault::init::init_vault(
+            &self.vault_addr,
+            secret_shares,
+            secret_threshold,
+            None,
+            None,
+        )
+        .await
     }
 
     async fn unseal_vault(&self, keys: &[String]) -> Result<(), crate::vault::VaultError> {
@@ -267,18 +338,67 @@ impl VaultOperations for VaultActor {
     async fn issue_certificate(
         &self,
         token: &str,
-        domain: &str,
+        _domain: &str, // Prefix with underscore since it's unused
         common_name: &str,
         ttl: &str,
     ) -> Result<String, crate::vault::VaultError> {
-        let (cert, _) = vault::pki::issue_certificateificate(
+        // Use the existing setup_pki function to create a certificate or find/create the proper issue_certificate function
+        let cert =
+            vault::pki::setup_pki(&self.vault_addr, token, common_name, ttl, false, None, None)
+                .await?
+                .0;
+        Ok(cert)
+    }
+
+    async fn setup_transit_engine(&self, token: &str) -> Result<(), crate::vault::VaultError> {
+        // Convert the bool result to () by ignoring the bool value
+        vault::transit::setup_transit_engine(&self.vault_addr, token)
+            .await
+            .map(|_| ())
+    }
+
+    async fn create_transit_key(
+        &self,
+        token: &str,
+        key_name: &str,
+    ) -> Result<(), crate::vault::VaultError> {
+        vault::transit::create_transit_key(&self.vault_addr, token, key_name).await
+    }
+
+    async fn create_transit_unseal_policy(
+        &self,
+        token: &str,
+        policy_name: &str,
+        key_name: &str,
+    ) -> Result<(), crate::vault::VaultError> {
+        vault::transit::create_transit_unseal_policy(&self.vault_addr, token, policy_name, key_name)
+            .await
+    }
+
+    async fn generate_transit_unseal_token(
+        &self,
+        token: &str,
+        policy_name: &str,
+    ) -> Result<String, crate::vault::VaultError> {
+        vault::transit::generate_transit_unseal_token(&self.vault_addr, token, policy_name).await
+    }
+
+    async fn generate_wrapped_transit_unseal_token(
+        &self,
+        token: &str,
+        policy_name: &str,
+        ttl: u32,
+    ) -> Result<String, vault::VaultError> {
+        vault::autounseal::generate_wrapped_transit_unseal_token(
             &self.vault_addr,
             token,
-            domain,
-            common_name,
-            Some(ttl),
+            policy_name,
+            ttl,
         )
-        .await?;
-        Ok(cert)
+        .await
+    }
+
+    async fn unwrap_token(&self, wrapped_token: &str) -> Result<String, vault::VaultError> {
+        vault::autounseal::unwrap_token(&self.vault_addr, wrapped_token).await
     }
 }
