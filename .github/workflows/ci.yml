@@ -10,8 +10,8 @@ jobs:
       contents: write
       packages: write
     with:
-      coveralls: true
-      codecov: true
+      coveralls: false
+      codecov: false
       publish_cratesio: true
       publish_github_release: false
     secrets:
