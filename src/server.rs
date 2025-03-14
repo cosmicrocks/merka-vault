@@ -105,7 +105,7 @@ async fn autounseal_handler(info: web::Json<AutounsealInput>) -> impl Responder 
 }
 
 pub async fn run_api_server_async(
-    vault_addr: &str,
+    _vault_addr: &str,
     _unused: &str,
     listen_addr: &str,
 ) -> Result<()> {

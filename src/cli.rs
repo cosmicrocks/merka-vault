@@ -190,7 +190,8 @@ pub async fn run_cli() -> Result<()> {
         Commands::ApiServer { listen_addr } => {
             println!("Starting API server on {}", listen_addr);
             // Start the Vault actor with a channel.
-            let (actor_addr, mut event_rx) = actor::start_vault_actor_with_channel(&cli.vault_addr);
+            let (_actor_addr, mut event_rx) =
+                actor::start_vault_actor_with_channel(&cli.vault_addr);
             // Spawn a background task to forward events (e.g., to socket.io).
             actix_rt::spawn(async move {
                 while let Ok(event) = event_rx.recv().await {
