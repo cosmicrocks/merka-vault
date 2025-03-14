@@ -1,7 +1,6 @@
 //! tests/actor_integration.rs
 
 mod common;
-use actix::Actor;
 use actix_rt::time::{sleep, timeout};
 use common::{init_logging, setup_vault_container, VaultMode};
 use log::{error, info};
