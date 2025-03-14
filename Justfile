@@ -20,7 +20,7 @@ build:
 # Run all tests (ensures Vault is up via docker-compose)
 test:
     @echo "Starting Vault for tests..."
-    cargo test -- --test-threads=3
+    cargo test -- --test-threads=3 --nocapture --color=always
 
 # Run clippy (lint) and format check
 lint:
@@ -30,7 +30,7 @@ fmt:
     cargo fmt -- --check
 
 fix:
-    cargo fmt --all
+    cargo fmt --all -- --check --verbose --color=always
 
 # Clean build artifacts
 clean:

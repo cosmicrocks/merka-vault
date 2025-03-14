@@ -11,7 +11,6 @@ use reqwest::{
 use serde_json::{json, Value};
 use std::str::FromStr;
 use std::time::Duration;
-use tracing::{debug, info};
 
 /// Client for interacting with the Vault HTTP API.
 pub struct VaultClient {

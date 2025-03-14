@@ -93,7 +93,7 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
 
             GenericImage::new("hashicorp/vault", "1.18.4")
                 .with_exposed_port(8200.tcp())
-                .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
+                // .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
                 .with_network("bridge")
                 .with_env_var("VAULT_LOCAL_CONFIG", auto_unseal_config)
                 .with_env_var("VAULT_TOKEN", token)
