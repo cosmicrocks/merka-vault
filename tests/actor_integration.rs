@@ -38,7 +38,7 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
             secret_shares: 1,
             secret_threshold: 1,
         })
-        .await?;
+        .await??; // Double question mark to handle both the send result and the inner result
 
     // Wait for the "Initialized" event
     let unsealer_event = timeout(Duration::from_secs(15), unsealer_rx.recv()).await;
