@@ -5,9 +5,7 @@
 //! standalone functions for direct use or CLI.
 
 pub mod actor;
-pub mod api;
 pub mod cli;
-pub mod server;
 pub mod vault;
 
 pub use actor::VaultActor;
