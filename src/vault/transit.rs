@@ -5,7 +5,46 @@
 //! for auto-unseal functionality.
 
 use crate::vault::{VaultClient, VaultError};
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+/// Response structure for token creation
+#[derive(Debug, Serialize, Deserialize)]
+struct TokenResponse {
+    request_id: String,
+    lease_id: String,
+    renewable: bool,
+    lease_duration: u64,
+    auth: TokenAuth,
+}
+
+/// Auth section of token response
+#[derive(Debug, Serialize, Deserialize)]
+struct TokenAuth {
+    client_token: String,
+    accessor: String,
+    policies: Vec<String>,
+    token_policies: Vec<String>,
+    metadata: Option<serde_json::Map<String, Value>>,
+    renewable: bool,
+    lease_duration: u64,
+}
+
+/// Wrapped token response structure
+#[derive(Debug, Serialize, Deserialize)]
+struct WrappedResponse {
+    request_id: String,
+    wrap_info: WrapInfo,
+}
+
+/// Wrap info section
+#[derive(Debug, Serialize, Deserialize)]
+struct WrapInfo {
+    token: String,
+    ttl: u64,
+    creation_time: String,
+    creation_path: String,
+}
 
 /// Sets up the transit secrets engine at the default path.
 ///
@@ -21,7 +60,7 @@ pub async fn setup_transit_engine(vault_addr: &str, token: &str) -> Result<(), V
     let client = VaultClient::new(vault_addr, token)?;
 
     // Enable the transit secrets engine
-    client
+    let _response = client
         .post_with_body(
             "/v1/sys/mounts/transit",
             json!({
@@ -30,6 +69,7 @@ pub async fn setup_transit_engine(vault_addr: &str, token: &str) -> Result<(), V
         )
         .await?;
 
+    // Response is already checked for errors by VaultClient
     Ok(())
 }
 
@@ -52,7 +92,7 @@ pub async fn create_transit_key(
     let client = VaultClient::new(vault_addr, token)?;
 
     // Create a new encryption key
-    client
+    let _response = client
         .put_with_body(
             &format!("/v1/transit/keys/{}", key_name),
             json!({
@@ -62,6 +102,7 @@ pub async fn create_transit_key(
         )
         .await?;
 
+    // Response is already checked for errors by VaultClient
     Ok(())
 }
 
@@ -106,7 +147,7 @@ pub async fn create_transit_unseal_policy(
     );
 
     // Create the policy
-    client
+    let _response = client
         .put_with_body(
             &format!("/v1/sys/policies/acl/{}", policy_name),
             json!({
@@ -115,6 +156,7 @@ pub async fn create_transit_unseal_policy(
         )
         .await?;
 
+    // Response is already checked for errors by VaultClient
     Ok(())
 }
 
@@ -148,19 +190,14 @@ pub async fn generate_transit_unseal_token(
         )
         .await?;
 
-    // Extract token from response
-    match response
+    // Extract client token directly from the response value
+    let client_token = response
         .get("auth")
         .and_then(|auth| auth.get("client_token"))
-    {
-        Some(client_token) => client_token
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| VaultError::ParseError("Failed to parse client token".to_string())),
-        None => Err(VaultError::ParseError(
-            "Client token not found in response".to_string(),
-        )),
-    }
+        .and_then(|token| token.as_str())
+        .ok_or_else(|| VaultError::Api("Failed to extract client token".to_string()))?;
+
+    Ok(client_token.to_string())
 }
 
 /// Generates a wrapped token with transit unseal policy attached.
@@ -198,14 +235,12 @@ pub async fn generate_wrapped_transit_token(
         )
         .await?;
 
-    // Extract wrapped token from response
-    match response.get("wrap_info").and_then(|wrap| wrap.get("token")) {
-        Some(wrapped_token) => wrapped_token
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| VaultError::ParseError("Failed to parse wrapped token".to_string())),
-        None => Err(VaultError::ParseError(
-            "Wrapped token not found in response".to_string(),
-        )),
-    }
+    // Extract the wrapped token directly from the response value
+    let wrapped_token = response
+        .get("wrap_info")
+        .and_then(|wrap| wrap.get("token"))
+        .and_then(|token| token.as_str())
+        .ok_or_else(|| VaultError::Api("Failed to extract wrapped token".to_string()))?;
+
+    Ok(wrapped_token.to_string())
 }

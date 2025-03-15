@@ -4,6 +4,7 @@ use crate::vault::VaultError;
 use anyhow::Result;
 use reqwest::Response;
 use reqwest::{Client, StatusCode};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -76,6 +77,52 @@ pub async fn check_response(resp: Response) -> Result<Value, VaultError> {
         }
         Err(VaultError::HttpStatus(status.as_u16(), body))
     }
+}
+
+/// Process an HTTP response and deserialize it to the specified type.
+/// Handles common status code checks and error conditions.
+pub async fn process_response<T: DeserializeOwned>(response: Response) -> Result<T, VaultError> {
+    let status = response.status();
+
+    if status.is_success() {
+        if status == StatusCode::NO_CONTENT {
+            return Err(VaultError::Api("No content received".to_string()));
+        }
+
+        let response_body = response
+            .json::<T>()
+            .await
+            .map_err(|e| VaultError::Api(format!("JSON error: {}", e)))?;
+
+        Ok(response_body)
+    } else {
+        // Get the error text if possible
+        let body = response.text().await.unwrap_or_default();
+
+        // Try to parse structured error messages from Vault
+        if let Ok(val) = serde_json::from_str::<Value>(&body) {
+            if let Some(errors) = val.get("errors").and_then(|v| v.as_array()) {
+                if !errors.is_empty() {
+                    if let Some(msg) = errors[0].as_str() {
+                        return Err(VaultError::Api(msg.to_string()));
+                    }
+                }
+            }
+        }
+
+        // Fall back to general HTTP error
+        Err(VaultError::HttpStatus(status.as_u16(), body))
+    }
+}
+
+/// Check if a response indicates success without extracting the body.
+/// This is useful for operations where you only care about success/failure.
+pub fn check_success_response(response: &Response) -> Result<(), VaultError> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(VaultError::Api(format!("API error: {}", status)));
+    }
+    Ok(())
 }
 
 /// Sends an authenticated POST request with a JSON payload.

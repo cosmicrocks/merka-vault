@@ -101,7 +101,7 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     // --- 5) Spin up the target in `AutoUnseal` mode, passing the *unwrapped* token ---
     let unsealer_bridge_ip = unsealer_container.get_bridge_ip_address().await?;
     let target_container = setup_vault_container(VaultMode::AutoUnseal {
-        unsealer_url: format!("http://{}:8200", unsealer_bridge_ip),
+        transit_unseal_url: format!("http://{}:8200", unsealer_bridge_ip),
         token: real_client_token.clone(), // <--- pass the *actual* unwrapped token!
         key_name: transit_key_name.to_string(),
     })

@@ -868,7 +868,7 @@ async fn test_realistic_autounseal_with_wrapped_token() -> Result<(), Box<dyn st
 
     // Start second Vault in auto-unseal mode
     let secondary_vault = setup_vault_container(common::VaultMode::AutoUnseal {
-        unsealer_url: primary_internal_url.clone(),
+        transit_unseal_url: primary_internal_url.clone(),
         token: unwrapped_token.clone(),
         key_name: key_name.to_string(),
     })

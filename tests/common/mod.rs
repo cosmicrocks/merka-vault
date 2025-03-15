@@ -25,18 +25,24 @@ pub enum VaultMode {
     Dev,
     // Auto-unseal mode pre-configures Vault with transit auto-unseal
     AutoUnseal {
-        unsealer_url: String,
+        transit_unseal_url: String, // renamed from unsealer_url
         token: String,
         key_name: String,
     },
 }
 
+// Helper function to create a base Vault container
+fn create_base_vault_container() -> testcontainers::core::ContainerRequest<GenericImage> {
+    GenericImage::new("hashicorp/vault", "1.18.4")
+        .with_exposed_port(8200.tcp())
+        .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
+        .with_network("bridge")
+}
+
 pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericImage> {
+    // updated return type
     match mode {
-        VaultMode::Dev => GenericImage::new("hashicorp/vault", "1.18.4")
-            .with_exposed_port(8200.tcp())
-            .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
-            .with_network("bridge")
+        VaultMode::Dev => create_base_vault_container()
             .with_env_var("VAULT_DEV_ROOT_TOKEN_ID", "root")
             .with_env_var("VAULT_DEV_LISTEN_ADDRESS", "0.0.0.0:8200")
             .with_cmd(vec!["server", "-dev", "-dev-root-token-id=root"])
@@ -49,10 +55,7 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
              "listener": [{"tcp": { "address": "0.0.0.0:8200", "tls_disable": true}}],
              "default_lease_ttl": "168h", "max_lease_ttl": "720h", "ui": true}
             "#;
-            GenericImage::new("hashicorp/vault", "1.18.4")
-                .with_exposed_port(8200.tcp())
-                .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
-                .with_network("bridge")
+            create_base_vault_container()
                 .with_env_var("VAULT_LOCAL_CONFIG", vault_local_config)
                 .with_cmd(vec!["server"])
                 .with_cap_add("IPC_LOCK")
@@ -61,7 +64,7 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
                 .unwrap()
         }
         VaultMode::AutoUnseal {
-            unsealer_url,
+            transit_unseal_url,
             token,
             key_name,
         } => {
@@ -83,18 +86,15 @@ pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericIma
                 "ui": true
             }}
             "#,
-                unsealer_url, key_name
+                transit_unseal_url, key_name
             );
 
             info!(
                 "Starting Vault with auto-unseal configuration connected to: {}",
-                unsealer_url
+                transit_unseal_url
             );
 
-            GenericImage::new("hashicorp/vault", "1.18.4")
-                .with_exposed_port(8200.tcp())
-                // .with_wait_for(WaitFor::message_on_stdout("Vault server started!"))
-                .with_network("bridge")
+            create_base_vault_container()
                 .with_env_var("VAULT_LOCAL_CONFIG", auto_unseal_config)
                 .with_env_var("VAULT_TOKEN", token)
                 .with_cmd(vec!["server"])
