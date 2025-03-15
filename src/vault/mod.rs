@@ -7,6 +7,7 @@ pub mod common;
 pub mod init;
 pub mod operations;
 pub mod pki;
+pub mod setup;
 pub mod status;
 pub mod transit;
 

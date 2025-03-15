@@ -7,6 +7,9 @@ use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
+use tokio::time::sleep;
+use tracing::{info, warn};
 
 /// Structure representing the seal status of Vault.
 #[derive(Debug, Serialize, Deserialize)]
@@ -205,5 +208,70 @@ pub async fn check_vault_status(vault_addr: &str) -> Result<VaultStatus> {
             status,
             error_text
         ))
+    }
+}
+
+/// Wait for a Vault at `addr` to become unsealed within `timeout`.
+pub async fn wait_for_vault_unseal(addr: &str, timeout: Duration) -> Result<()> {
+    let start = std::time::Instant::now();
+    loop {
+        match check_vault_status(addr).await {
+            Ok(status) if status.initialized && !status.sealed => {
+                info!("Vault at {} is unsealed.", addr);
+                return Ok(());
+            }
+            Ok(status) => {
+                info!(
+                    "Waiting for Vault at {} (initialized: {}, sealed: {})",
+                    addr, status.initialized, status.sealed
+                );
+            }
+            Err(e) => warn!("Error checking Vault status at {}: {}", addr, e),
+        }
+        if start.elapsed() > timeout {
+            return Err(anyhow::anyhow!(
+                "Timed out waiting for Vault at {} to unseal",
+                addr
+            ));
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Wait for a Vault at `addr` to become available within `timeout`.
+pub async fn wait_for_vault_availability(addr: &str, timeout: Duration) -> Result<()> {
+    let start = std::time::Instant::now();
+    info!("Waiting for Vault at {} to become available...", addr);
+    loop {
+        let response = reqwest::get(format!("{}/v1/sys/health", addr)).await;
+
+        match response {
+            Ok(response) => {
+                // Try to parse the response body as text
+                match response.text().await {
+                    Ok(body) => {
+                        if body.contains("initialized") {
+                            info!("Vault at {} is available (responding to API calls).", addr);
+                            return Ok(());
+                        }
+                        info!("Vault responded but with unexpected content, continuing to wait...");
+                    }
+                    Err(_) => {
+                        info!("Vault responded but couldn't read body, continuing to wait...");
+                    }
+                }
+            }
+            Err(_) => {
+                info!("Waiting for Vault at {} to become available...", addr);
+            }
+        }
+
+        if start.elapsed() > timeout {
+            return Err(anyhow::anyhow!(
+                "Timed out waiting for Vault at {} to become available",
+                addr
+            ));
+        }
+        sleep(Duration::from_secs(1)).await;
     }
 }
