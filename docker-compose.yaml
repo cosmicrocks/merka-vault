@@ -2,6 +2,7 @@ services:
   vault:
     image: hashicorp/vault:1.18.4
     container_name: merka-vault-root
+    restart: always
     ports:
       - "8200:8200"
     cap_add:
@@ -9,20 +10,25 @@ services:
     command: ["server"]
     volumes:
       - ./config/vault.hcl:/vault/config/vault.hcl
+    environment:
+      LOG_LEVEL: "debug"
     networks:
       - vault-network
 
-  # Sub vault that will be auto-unsealed by the root vault
   sub-vault:
     image: hashicorp/vault:1.18.4
     container_name: merka-vault-sub
+    restart: always
     ports:
       - "8202:8200"
     cap_add:
       - IPC_LOCK
     command: ["server"]
     volumes:
-      - ./config/vault.hcl:/vault/config/vault.hcl
+      - ./config/sub-vault.hcl:/vault/config/vault.hcl
+    environment:
+      LOG_LEVEL: "debug"
+      VAULT_TOKEN: "${VAULT_TOKEN}"
     depends_on:
       - vault
     networks:

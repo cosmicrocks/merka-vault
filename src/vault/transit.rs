@@ -96,6 +96,11 @@ pub async fn create_transit_unseal_policy(
         path "transit/encrypt/{}" {{
             capabilities = ["update"]
         }}
+
+        # Allow token renewal for auto-unseal
+        path "auth/token/renew-self" {{
+            capabilities = ["update"]
+        }}
         "#,
         key_name, key_name
     );
@@ -183,10 +188,10 @@ pub async fn generate_wrapped_transit_token(
 
     let response = client
         .post_with_body(
-            "/v1/auth/token/create",
+            "/v1/auth/token/create-orphan",
             json!({
                 "policies": [policy_name],
-                "ttl": "768h",
+                "period": "24h",
                 "display_name": "transit-unseal-token",
                 "renewable": true
             }),

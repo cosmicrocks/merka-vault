@@ -4,7 +4,8 @@
 //! unseal it for use.
 
 use crate::vault::VaultError;
-use anyhow::{Context, Result as AnyhowResult};
+use anyhow::{anyhow, Context, Result as AnyhowResult};
+use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -63,11 +64,15 @@ pub struct InitResult {
 }
 
 /// Structure representing the result of an unseal operation.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnsealResult {
     pub sealed: bool,
-    pub progress: u8,
+    #[serde(rename = "t", default)]
     pub threshold: u8,
+    #[serde(rename = "n", default)]
+    pub shares: u8,
+    #[serde(default)]
+    pub progress: u8,
     #[serde(default)]
     pub success: bool,
 }
@@ -204,28 +209,135 @@ pub async fn unseal_vault(addr: &str, keys: &[String]) -> Result<(), VaultError>
 ///
 /// A `Result` containing the unseal status or an error
 pub async fn unseal_root_vault(addr: &str, keys: Vec<String>) -> AnyhowResult<UnsealResult> {
+    info!("Unsealing vault at {} with {} keys", addr, keys.len());
     let client = Client::new();
-    let url = format!("{}/v1/sys/unseal", addr);
-    let mut result: UnsealResult = UnsealResult {
-        success: false,
-        sealed: true,
-        progress: 0,
-        threshold: 0,
-    };
-    for key in keys {
-        let response = client
-            .post(&url)
-            .json(&serde_json::json!({ "key": key }))
+    let unseal_url = format!("{}/v1/sys/unseal", addr);
+
+    // Check current seal status first
+    match super::status::get_vault_status(addr).await {
+        Ok(status) => {
+            if !status.sealed {
+                info!("Vault at {} is already unsealed", addr);
+                return Ok(UnsealResult {
+                    sealed: false,
+                    threshold: 0,
+                    shares: 0,
+                    progress: 0,
+                    success: true,
+                });
+            }
+            info!("Vault is sealed, proceeding with unsealing...");
+        }
+        Err(e) => warn!("Could not check seal status: {}", e),
+    }
+
+    let mut last_result: Option<UnsealResult> = None;
+
+    // Only use the threshold number of keys (normally 3)
+    let threshold_keys = keys.iter().take(3);
+
+    for key in threshold_keys {
+        debug!("Sending unseal request with key to {}", unseal_url);
+        let unseal_response = client
+            .put(&unseal_url)
+            .json(&json!({ "key": key }))
             .send()
-            .await
-            .with_context(|| "Failed to send unseal request")?;
-        result = response
-            .json::<UnsealResult>()
-            .await
-            .with_context(|| "Failed to parse unseal response")?;
-        if !result.sealed {
+            .await?;
+
+        if !unseal_response.status().is_success() {
+            let status = unseal_response.status();
+            let text = unseal_response.text().await?;
+            error!(
+                "Unseal operation failed. Status: {}, Body: {}",
+                status, text
+            );
+            return Err(anyhow!(
+                "Failed to unseal Vault: HTTP {} - {}",
+                status,
+                text
+            ));
+        }
+
+        let unseal_result: UnsealResult = unseal_response.json().await?;
+        last_result = Some(unseal_result.clone());
+
+        info!(
+            "Unseal progress: sealed={}, threshold={}, shares={}, progress={}",
+            unseal_result.sealed,
+            unseal_result.threshold,
+            unseal_result.shares,
+            unseal_result.progress
+        );
+
+        if !unseal_result.sealed {
+            info!("Vault unsealed successfully!");
             break;
         }
     }
-    Ok(result)
+
+    match last_result {
+        Some(result) if !result.sealed => {
+            info!("Vault unsealing completed successfully");
+            Ok(result)
+        }
+        Some(result) => {
+            warn!(
+                "Vault still sealed after applying threshold keys. Progress: {}/{}",
+                result.progress, result.threshold
+            );
+            Ok(result)
+        }
+        None => {
+            error!("No unseal operations were performed");
+            Err(anyhow!("No unseal operations were performed"))
+        }
+    }
+}
+
+pub async fn initialize_vault(addr: &str) -> AnyhowResult<InitResult> {
+    info!("Initializing vault at {}", addr);
+    let client = Client::new();
+    let init_url = format!("{}/v1/sys/init", addr);
+
+    // Check if already initialized
+    match super::status::get_vault_status(addr).await {
+        Ok(status) if status.initialized => {
+            info!("Vault at {} is already initialized", addr);
+            return Err(anyhow!("Vault is already initialized"));
+        }
+        Ok(_) => info!("Vault not yet initialized, proceeding..."),
+        Err(e) => warn!("Could not check initialization status: {}", e),
+    }
+
+    debug!("Sending initialization request to {}", init_url);
+    let init_response = client
+        .put(&init_url)
+        .json(&json!({
+            "secret_shares": 5,
+            "secret_threshold": 3
+        }))
+        .send()
+        .await?;
+
+    if !init_response.status().is_success() {
+        let status = init_response.status();
+        let text = init_response.text().await?;
+        error!(
+            "Vault initialization failed. Status: {}, Body: {}",
+            status, text
+        );
+        return Err(anyhow!(
+            "Failed to initialize Vault: HTTP {} - {}",
+            status,
+            text
+        ));
+    }
+
+    let init_result: InitResult = init_response.json().await?;
+    info!(
+        "Vault initialized successfully with {} keys",
+        init_result.keys.len()
+    );
+
+    Ok(init_result)
 }
