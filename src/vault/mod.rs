@@ -7,6 +7,7 @@ pub mod common;
 pub mod init;
 pub mod operations;
 pub mod pki;
+pub mod status;
 pub mod transit;
 
 // Re-export key types and traits for convenience
@@ -32,9 +33,17 @@ pub enum VaultError {
     #[error("Network error: {0}")]
     Network(String),
 
+    /// Connection error when connecting to Vault.
+    #[error("Connection error: {0}")]
+    Connection(String),
+
     /// Error when parsing response from Vault.
     #[error("Parse error: {0}")]
     ParseError(String),
+
+    /// Error parsing response data.
+    #[error("Parsing error: {0}")]
+    Parsing(String),
 
     /// Error constructing request to Vault.
     #[error("Request error: {0}")]
@@ -43,6 +52,14 @@ pub enum VaultError {
     /// HTTP status error response.
     #[error("HTTP status {0}: {1}")]
     HttpStatus(u16, String),
+
+    /// Vault is sealed error.
+    #[error("Vault is sealed: {0}")]
+    Sealed(String),
+
+    /// Vault is already initialized.
+    #[error("Vault is already initialized")]
+    AlreadyInitialized,
 
     /// Error from the reqwest crate.
     #[error("Reqwest error: {0}")]

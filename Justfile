@@ -37,4 +37,10 @@ clean:
     cargo clean
 
 code2prompt:
-    code2prompt --include '*.yml,*.yaml,*.toml,*.md,*.rs' .
+    code2prompt --include '*.yml,*.yaml,*.toml,*.md,*.rs,*.hcl' .
+
+compose-up:
+    docker-compose up -d
+
+compose-down:
+    docker-compose down
