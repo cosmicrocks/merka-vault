@@ -13,6 +13,7 @@ use crate::vault::{
     pki, transit,
 };
 
+#[derive(Debug, Clone)]
 pub struct VaultSetupConfig {
     pub root_addr: String,
     pub sub_addr: String,
@@ -23,6 +24,14 @@ pub struct VaultSetupConfig {
     pub key_name: String,
     pub output_file: Option<String>,
     pub root_token: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetupResult {
+    pub root_init: crate::vault::InitResult,
+    pub root_role: String,
+    pub sub_init: crate::vault::AutoUnsealResult,
+    pub int_role: String,
 }
 
 pub struct VaultSetupResult {
@@ -49,13 +58,13 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
     // Step 1: Initialize (if needed) and unseal the root Vault.
     let root_status = check_vault_status(&config.root_addr).await?;
     let root_init: InitResult;
-    if !root_status.initialized {
+    if (!root_status.initialized) {
         info!("Root Vault is not initialized.");
         let init_opts = InitOptions {
             secret_shares: config.secret_shares,
             secret_threshold: config.secret_threshold,
         };
-        if root_status.type_field == "shamir" {
+        if (root_status.type_field == "shamir") {
             info!("Vault seal type is 'shamir'. Using secret_shares/secret_threshold.");
             root_init = initialize_vault_infrastructure(&config.root_addr, init_opts).await?;
         } else {
@@ -135,7 +144,7 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
         .env("VAULT_TOKEN", unwrapped_token.clone())
         .args(&["up", "-d", "--force-recreate", "sub-vault"])
         .output()?;
-    if !output.status.success() {
+    if (!output.status.success()) {
         info!(
             "Failed to restart sub‑vault container: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -198,7 +207,7 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
         let mut out = String::new();
         out.push_str("# Root Vault Credentials\n");
         out.push_str(&format!("Root Token: {}\n", root_init.root_token));
-        if !root_init.keys.is_empty() {
+        if (!root_init.keys.is_empty()) {
             out.push_str("Unseal Keys:\n");
             for key in &root_init.keys {
                 out.push_str(&format!("{}\n", key));
