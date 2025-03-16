@@ -32,6 +32,7 @@ tracing = "0.1.41"
 scopeguard = "1.2.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 futures = "0.3.31"
+rusqlite = "0.34.0"
 
 
 [dev-dependencies]

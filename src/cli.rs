@@ -70,6 +70,9 @@ pub enum Commands {
         /// Optional root token if the root Vault is already initialized.
         #[arg(long)]
         root_token: Option<String>,
+        /// Setup mode: "local" for Docker Compose, "remote" for Kubernetes.
+        #[arg(long, default_value = "local")]
+        mode: String,
     },
 }
 
@@ -189,6 +192,7 @@ pub async fn run_cli() -> Result<()> {
             key_name,
             output_file,
             root_token,
+            mode,
         } => {
             let config = VaultSetupConfig {
                 root_addr,
@@ -200,6 +204,7 @@ pub async fn run_cli() -> Result<()> {
                 key_name,
                 output_file,
                 root_token,
+                mode,
             };
 
             match vault_cli.setup(config).await {
