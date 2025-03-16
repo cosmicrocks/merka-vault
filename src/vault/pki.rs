@@ -8,6 +8,13 @@ use crate::vault::VaultError;
 use reqwest::Client;
 use serde_json::json;
 
+/// Result of a PKI setup operation
+#[derive(Debug, Clone)]
+pub struct PkiResult {
+    pub cert_chain: String,
+    pub role_name: String,
+}
+
 /// Configures Vault as a root PKI engine by mounting, tuning, and generating a self-signed certificate.
 ///
 /// # Parameters

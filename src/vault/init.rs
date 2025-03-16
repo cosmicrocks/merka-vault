@@ -77,7 +77,7 @@ pub struct UnsealResult {
     pub success: bool,
 }
 
-/// Initializes a new Vault server.
+// Initializes a new Vault server.
 ///
 /// # Arguments
 ///

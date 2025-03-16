@@ -6,6 +6,7 @@
 
 pub mod actor;
 pub mod cli;
+pub mod interface;
 pub mod vault;
 
 pub use actor::VaultActor;

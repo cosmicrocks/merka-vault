@@ -13,8 +13,9 @@ pub mod transit;
 
 // Re-export key types and traits for convenience
 pub use client::VaultClient;
-pub use init::InitResult;
+pub use init::{InitResult, UnsealResult};
 pub use operations::VaultOperations;
+pub use pki::PkiResult;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -78,4 +79,12 @@ pub struct AppRoleCredentials {
     pub role_id: String,
     /// The secret_id for AppRole authentication.
     pub secret_id: String,
+}
+
+/// Result type for auto-unseal operations
+#[derive(Debug, Clone)]
+pub struct AutoUnsealResult {
+    pub root_token: String,
+    pub recovery_keys: Option<Vec<String>>,
+    pub success: bool,
 }
