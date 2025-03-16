@@ -4,13 +4,16 @@ use std::process::Command;
 use std::time::Duration;
 use tracing::info;
 
-use crate::vault::{
-    autounseal,
-    common::{check_vault_status, wait_for_vault_availability, wait_for_vault_unseal},
-    init::{
-        init_vault, initialize_vault_infrastructure, unseal_root_vault, InitOptions, InitResult,
+use crate::{
+    db::db::VaultDb,
+    vault::{
+        autounseal,
+        common::{check_vault_status, wait_for_vault_availability, wait_for_vault_unseal},
+        init::{
+            init_vault, initialize_vault_infrastructure, unseal_root_vault, InitOptions, InitResult,
+        },
+        pki, transit,
     },
-    pki, transit,
 };
 
 #[derive(Debug, Clone)]
@@ -24,6 +27,7 @@ pub struct VaultSetupConfig {
     pub key_name: String,
     pub output_file: Option<String>,
     pub root_token: Option<String>,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -41,10 +45,10 @@ pub struct VaultSetupResult {
     pub int_role: String,
     pub root_cert: String,
     pub int_cert: String,
+    pub unwrapped_token: Option<String>,
 }
 
 /// Fully automate multi‑tier Vault setup with auto‑unseal and PKI.
-/// This function performs these steps:
 /// 1. Initializes (if needed) and unseals the root Vault.
 /// 2. Sets up the transit engine on the root Vault.
 /// 3. Generates a wrapped token, unwraps it, and restarts the sub‑Vault container with the token injected.
@@ -58,6 +62,7 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
     // Step 1: Initialize (if needed) and unseal the root Vault.
     let root_status = check_vault_status(&config.root_addr).await?;
     let root_init: InitResult;
+    let sub_init: InitResult;
     if !root_status.initialized {
         info!("Root Vault is not initialized.");
         let init_opts = InitOptions {
@@ -138,38 +143,53 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
     let unwrapped_token = autounseal::unwrap_token(&config.root_addr, &wrapped_token).await?;
     info!("Unwrapped token obtained.");
 
-    // Step 5: Restart the sub Vault container with the new VAULT_TOKEN.
-    info!("Restarting sub Vault container with updated VAULT_TOKEN...");
-    let output = Command::new("docker-compose")
-        .env("VAULT_TOKEN", unwrapped_token.clone())
-        .args(&["up", "-d", "--force-recreate", "sub-vault"])
-        .output()?;
-    if !output.status.success() {
-        info!(
-            "Failed to restart sub‑vault container: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    // Step 5: Handle sub Vault setup based on mode.
+    if config.mode == "local" {
+        info!("Restarting sub Vault container with updated VAULT_TOKEN...");
+        let output = Command::new("docker-compose")
+            .env("VAULT_TOKEN", unwrapped_token.clone())
+            .args(&["up", "-d", "--force-recreate", "sub-vault"])
+            .output()?;
+        if !output.status.success() {
+            info!(
+                "Failed to restart sub‑vault container: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        } else {
+            info!("Sub‑vault container restarted successfully.");
+        }
+        // Wait for sub Vault to be available
+        wait_for_vault_availability(&config.sub_addr, Duration::from_secs(30)).await?;
+        // Initialize sub Vault with auto-unseal
+        sub_init = autounseal::init_with_autounseal(&config.sub_addr).await?;
+    } else if config.mode == "remote" {
+        info!("Returning unwrapped token for remote setup...");
+        // Initialize sub Vault with auto-unseal
+        sub_init = autounseal::init_with_autounseal(&config.sub_addr).await?;
+        wait_for_vault_availability(&config.sub_addr, Duration::from_secs(30)).await?;
+        // Return the unwrapped token for manual update in remote setup
+        return Ok(VaultSetupResult {
+            root_init,
+            sub_init,
+            root_role: String::new(),
+            int_role: String::new(),
+            root_cert: String::new(),
+            int_cert: String::new(),
+            unwrapped_token: Some(unwrapped_token),
+        });
     } else {
-        info!("Sub‑vault container restarted successfully.");
+        // Ensure sub_init is initialized in all code paths
+        sub_init = InitResult {
+            keys: vec![],
+            keys_base64: None,
+            recovery_keys: None,
+            recovery_keys_base64: None,
+            root_token: String::new(),
+        };
     }
-
-    // Wait for the sub-vault to be available before initialization
-    info!("Waiting for sub-vault to become available...");
-    wait_for_vault_availability(&config.sub_addr, Duration::from_secs(30)).await?;
-
-    // Step 6: Initialize the sub Vault with auto‑unseal.
-    info!("Initializing sub Vault with auto‑unseal...");
-    let sub_init = autounseal::init_with_autounseal(&config.sub_addr).await?;
-    info!(
-        "Sub Vault auto‑initialized with token: {}",
-        sub_init.root_token
-    );
-
-    // Step 7: Wait for the sub Vault to be unsealed.
-    info!("Waiting for sub Vault to be unsealed...");
     wait_for_vault_unseal(&config.sub_addr, Duration::from_secs(60)).await?;
 
-    // Step 8: Set up PKI on the root Vault.
+    // Step 6: Set up PKI on the root Vault.
     info!("Setting up root PKI on root Vault...");
     let (root_cert, root_role) = pki::setup_pki(
         &config.root_addr,
@@ -183,7 +203,7 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
     .await?;
     info!("Root PKI setup complete. PKI Role: {}", root_role);
 
-    // Step 9: Set up intermediate PKI on the sub Vault.
+    // Step 7: Set up intermediate PKI on the sub Vault.
     info!("Setting up intermediate PKI on sub Vault...");
     let (int_cert, int_role) = pki::setup_pki_intermediate(
         &config.root_addr,
@@ -199,8 +219,21 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
         int_role
     );
 
-    // Step 10: Log final outcome.
+    // Step 8: Log final outcome.
     info!("Multi‑tier Vault infrastructure setup complete!");
+
+    // Save Vault keys and addresses to SQLite
+    let db = VaultDb::new("vaults.db")?;
+    db.save_vault(
+        &config.root_addr,
+        &root_init.root_token,
+        &root_init.keys.join(","),
+    )?;
+    db.save_vault(
+        &config.sub_addr,
+        &sub_init.root_token,
+        &sub_init.keys.join(","),
+    )?;
 
     // Optionally save credentials to file.
     if let Some(path) = config.output_file {
@@ -215,12 +248,6 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
         }
         out.push_str("\n# Sub Vault Credentials\n");
         out.push_str(&format!("Root Token: {}\n", sub_init.root_token));
-        if let Some(recovery_keys) = &sub_init.recovery_keys {
-            out.push_str("Recovery Keys:\n");
-            for key in recovery_keys {
-                out.push_str(&format!("{}\n", key));
-            }
-        }
         fs::write(&path, out)?;
         info!("Credentials saved to {}", path);
     }
@@ -232,5 +259,6 @@ pub async fn setup_multi_tier_vault(config: VaultSetupConfig) -> Result<VaultSet
         int_role,
         root_cert,
         int_cert,
+        unwrapped_token: Some(unwrapped_token),
     })
 }
