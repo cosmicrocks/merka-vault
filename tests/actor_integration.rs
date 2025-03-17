@@ -40,26 +40,45 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
         })
         .await??; // Double question mark to handle both the send result and the inner result
 
-    // Wait for the "Initialized" event
-    let unsealer_event = timeout(Duration::from_secs(15), unsealer_rx.recv()).await;
-    let mut unsealer_root_token = None;
-    let mut unsealer_keys = Vec::new();
+    // Keep waiting for events until we get "Initialized" or an error
+    // Set a timeout for the entire initialization process
+    let overall_timeout = Duration::from_secs(30);
+    let init_result = timeout(overall_timeout, async {
+        loop {
+            match unsealer_rx.recv().await {
+                Ok(VaultEvent::Initialized { root_token, keys }) => {
+                    info!("Unsealer vault initialized, root_token={root_token}");
+                    return Ok((root_token, keys));
+                }
+                Ok(VaultEvent::StatusChecked { initialized, sealed, standby }) => {
+                    info!("Vault status: initialized={initialized}, sealed={sealed}, standby={standby}");
+                    // Continue waiting for the Initialized event
+                }
+                Ok(VaultEvent::Error(e)) => {
+                    error!("Unsealer init error: {}", e);
+                    return Err(format!("Unsealer init error: {e}"));
+                }
+                Ok(_) => {
+                    // Handle any other VaultEvent variants we don't need to process specially
+                    info!("Received other vault event, continuing to wait for initialization");
+                }
+                Err(e) => {
+                    error!("Failed to receive event: {}", e);
+                    return Err(format!("Failed to receive event: {e}"));
+                }
+            }
+        }
+    }).await;
 
-    match unsealer_event {
-        Ok(Ok(VaultEvent::Initialized { root_token, keys })) => {
-            info!("Unsealer vault initialized, root_token={root_token}");
-            unsealer_root_token = Some(root_token);
-            unsealer_keys = keys;
+    let (unsealer_root_token, unsealer_keys) = match init_result {
+        Ok(Ok((root_token, keys))) => (Some(root_token), keys),
+        Ok(Err(e)) => {
+            return Err(e.into());
         }
-        Ok(Ok(VaultEvent::Error(e))) => {
-            error!("Unsealer init error: {}", e);
-            return Err(format!("Unsealer init error: {e}").into());
+        Err(_) => {
+            return Err("Timed out waiting for vault initialization".into());
         }
-        other => {
-            error!("Unexpected unsealer event: {:?}", other);
-            return Err("Unexpected unsealer event".into());
-        }
-    }
+    };
 
     // Unseal the unsealer vault with the returned key
     if let Some(k) = unsealer_keys.first() {

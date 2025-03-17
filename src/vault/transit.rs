@@ -59,18 +59,30 @@ struct WrapInfo {
 pub async fn setup_transit_engine(vault_addr: &str, token: &str) -> Result<(), VaultError> {
     let client = VaultClient::new(vault_addr, token)?;
 
-    // Enable the transit secrets engine
-    let _response = client
+    // Try to enable the transit secrets engine
+    let response = client
         .post_with_body(
             "/v1/sys/mounts/transit",
             json!({
                 "type": "transit"
             }),
         )
-        .await?;
+        .await;
 
-    // Response is already checked for errors by VaultClient
-    Ok(())
+    // Handle specific error cases - it's OK if transit is already enabled
+    match response {
+        Ok(_) => Ok(()),
+        Err(VaultError::HttpStatus(status, error_text))
+            if error_text.contains("path is already in use") =>
+        {
+            log::info!("Transit engine already enabled, continuing");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("Failed to enable transit engine: {}", e);
+            Err(e)
+        }
+    }
 }
 
 /// Creates a new encryption key in the transit engine.
@@ -91,8 +103,8 @@ pub async fn create_transit_key(
 ) -> Result<(), VaultError> {
     let client = VaultClient::new(vault_addr, token)?;
 
-    // Create a new encryption key
-    let _response = client
+    // Try to create a new encryption key
+    let response = client
         .put_with_body(
             &format!("/v1/transit/keys/{}", key_name),
             json!({
@@ -100,20 +112,32 @@ pub async fn create_transit_key(
                 "exportable": false
             }),
         )
-        .await?;
+        .await;
 
-    // Response is already checked for errors by VaultClient
-    Ok(())
+    // Handle specific error cases - it's OK if key already exists
+    match response {
+        Ok(_) => Ok(()),
+        Err(VaultError::HttpStatus(status, error_text))
+            if error_text.contains("already exists") =>
+        {
+            log::info!("Transit key '{}' already exists, continuing", key_name);
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("Failed to create transit key '{}': {}", key_name, e);
+            Err(e)
+        }
+    }
 }
 
-/// Creates a policy for auto-unseal operations using the transit engine.
+/// Creates a policy for transit-based auto-unseal.
 ///
 /// # Arguments
 ///
 /// * `vault_addr` - The address of the Vault server
 /// * `token` - The authentication token to use
 /// * `policy_name` - The name of the policy to create
-/// * `key_name` - The name of the encryption key to use
+/// * `key_name` - The name of the transit key to use
 ///
 /// # Returns
 ///
@@ -126,38 +150,49 @@ pub async fn create_transit_unseal_policy(
 ) -> Result<(), VaultError> {
     let client = VaultClient::new(vault_addr, token)?;
 
+    // Create minimal policy for transit key usage
     let policy_hcl = format!(
         r#"
-        # Allow decryption using transit engine for auto-unseal
-        path "transit/decrypt/{}" {{
+        # Allow token creation
+        path "auth/token/create" {{
             capabilities = ["update"]
         }}
 
-        # Allow encryption using transit engine for auto-unseal
+        # Allow encryption operations with the key
         path "transit/encrypt/{}" {{
             capabilities = ["update"]
         }}
 
-        # Allow token renewal for auto-unseal
-        path "auth/token/renew-self" {{
+        # Allow decryption operations with the key
+        path "transit/decrypt/{}" {{
             capabilities = ["update"]
         }}
         "#,
         key_name, key_name
     );
 
-    // Create the policy
-    let _response = client
+    // Attempt to put the policy
+    let response = client
         .put_with_body(
             &format!("/v1/sys/policies/acl/{}", policy_name),
             json!({
-                "policy": policy_hcl
+                "policy": policy_hcl,
             }),
         )
-        .await?;
+        .await;
 
-    // Response is already checked for errors by VaultClient
-    Ok(())
+    // Handle specific error cases - for policies we generally want to overwrite
+    // but we'll log if there were issues
+    match response {
+        Ok(_) => {
+            log::info!("Created/updated auto-unseal policy: {}", policy_name);
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("Failed to create/update policy '{}': {}", policy_name, e);
+            Err(e)
+        }
+    }
 }
 
 /// Generates a token with transit unseal policy attached.

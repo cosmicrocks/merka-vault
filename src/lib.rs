@@ -6,7 +6,6 @@
 
 pub mod actor;
 pub mod cli;
-pub mod db;
 pub mod interface;
 pub mod vault;
 

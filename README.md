@@ -91,7 +91,6 @@ For more details, see the API documentation.
 Example (macOS):
 
 ```sh
-
 # for private repos dependencies
 git config --global credential.helper osxkeychain
 
@@ -103,6 +102,22 @@ brew install just
 
 # Run tests
 just test
+
+# Start local setup
+just compose-up
+
+# Build the project
+just build
+cargo build --all
+
+# Setup root vault
+./target/debug/merka-vault setup-root
+
+# Configure sub vault auto-unseal
+VAULT_TOKEN=<UNWRAPPED_TOKEN> && docker-compose up -d sub-vault
+
+# Setup sub vault
+./target/debug/merka-vault setup-sub --root-token <ROOT_TOKEN>
 ```
 
 ## Contributing
