@@ -73,8 +73,6 @@ pub async fn setup_sub_vault(config: SubSetupConfig) -> Result<SubSetupResult> {
     .await?;
     info!("Intermediate PKI is set: role={} chain-len=?", int_role);
 
-    // You could do more config or store into DB here
-
     Ok(SubSetupResult {
         sub_init,
         // If you wanted to also store root role name, you might do so. For example:

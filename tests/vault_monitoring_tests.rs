@@ -1,26 +1,12 @@
 use actix_rt::time::sleep;
 use log::{debug, info, warn};
 use merka_vault::actor::{
-    start_vault_actor_with_in_memory_db, CheckStatus, GetUnwrappedTransitToken, SetupRoot,
-    SetupSub, VaultActor, VaultEvent,
+    self, CheckStatus, GetUnwrappedTransitToken, SetupRoot, SetupSub, VaultActor, VaultEvent,
 };
-use std::fs;
-use std::path::Path;
 use std::time::Duration;
 
 mod common;
 use common::{init_logging, setup_vault_container, VaultMode};
-
-// Helper function to clean up any stray files
-fn cleanup_test_files() {
-    // Clean up any DB files that might have been created accidentally
-    let default_paths = ["vaults.db", "vault_health.db"];
-    for path in default_paths {
-        if Path::new(path).exists() {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
 
 #[actix_rt::test]
 async fn test_vault_monitoring_and_listing() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,8 +22,8 @@ async fn test_vault_monitoring_and_listing() -> Result<(), Box<dyn std::error::E
     info!("Waiting for root Vault to be available...");
     sleep(Duration::from_secs(10)).await;
 
-    // Start actor with monitoring - use in-memory DB for testing
-    let (actor, mut rx) = start_vault_actor_with_in_memory_db(&root_addr);
+    // Start actor with monitoring enabled
+    let (actor, mut rx) = actor::start_vault_actor_with_channel(&root_addr);
 
     // Drain any existing events from the channel
     while rx.try_recv().is_ok() {
@@ -203,7 +189,7 @@ async fn test_vault_monitoring_and_listing() -> Result<(), Box<dyn std::error::E
     assert!(!root_sealed, "Root vault should be unsealed");
 
     // Create a new actor configured with the sub vault address for checking
-    let (sub_actor, _) = start_vault_actor_with_in_memory_db(&sub_addr);
+    let (sub_actor, _) = actor::start_vault_actor_with_channel(&sub_addr);
     let (sub_init, sub_sealed) = actor_check_status(&sub_actor, "sub").await?;
     assert!(sub_init, "Sub vault should be initialized");
     assert!(!sub_sealed, "Sub vault should be unsealed");
@@ -233,8 +219,5 @@ async fn test_vault_monitoring_and_listing() -> Result<(), Box<dyn std::error::E
         health_updates > 0 || list_events > 0,
         "Should have received some events"
     );
-
-    // Clean up at the end
-    cleanup_test_files();
     Ok(())
 }

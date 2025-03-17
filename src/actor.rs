@@ -629,25 +629,6 @@ pub fn start_vault_actor_with_channel(
     (addr, rx)
 }
 
-/// Starts a VaultActor with in-memory database for testing
-pub fn start_vault_actor_with_in_memory_db(
-    vault_addr: &str,
-) -> (Addr<VaultActor>, broadcast::Receiver<VaultEvent>) {
-    let (tx, rx) = broadcast::channel(16);
-    let actor = VaultActor::new_with_test_config(vault_addr, Some(tx));
-
-    // Clone the actor before starting it
-    let addr = actor.start();
-
-    // No need to start monitoring in tests
-    // if this were a production environment we would do:
-    // tokio::spawn(async move {
-    //     monitoring_actor.start_monitoring().await;
-    // });
-
-    (addr, rx)
-}
-
 #[async_trait]
 impl VaultInterface for VaultActor {
     async fn check_status(&self, addr: &str) -> Result<VaultStatus, VaultError> {
