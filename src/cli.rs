@@ -6,17 +6,20 @@ use tracing::{error, info};
 
 use crate::interface::VaultInterface;
 use crate::vault::common::VaultStatus;
-use crate::vault::setup::{SetupResult, VaultSetupConfig};
 use crate::vault::{UnsealResult, VaultError};
+
+// --- Import the new two-step setup logic ---
+use crate::vault::setup_root::{setup_root_vault, RootSetupConfig, RootSetupResult};
+use crate::vault::setup_sub::{setup_sub_vault, SubSetupConfig, SubSetupResult};
 
 #[derive(Parser)]
 #[command(
     name = "merka-vault",
-    about = "Vault provisioning CLI (supports unseal, status, and setup)",
-    version = "0.1.0"
+    about = "Vault provisioning CLI (supports unseal, status, and multi-step setup)",
+    version = "0.2.0"
 )]
 pub struct Cli {
-    /// Root Vault server address.
+    /// Default root Vault server address (used if subcommands don't override).
     #[arg(long, default_value = "http://127.0.0.1:8200", env = "ROOT_VAULT_ADDR")]
     pub vault_addr: String,
 
@@ -26,57 +29,95 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// List all known vaults and their status
+    List,
+
     /// Unseal Vault.
     Unseal {
-        /// Provide one or more unseal keys.
+        /// Provide one or more unseal keys
         #[arg(long, value_name = "UNSEAL_KEY")]
         keys: Vec<String>,
-        /// Optionally read keys from a file.
+
+        /// Optionally read keys from a file
         #[arg(long)]
         keys_file: Option<String>,
     },
+
     /// Check Vault status.
     Status {
-        /// Specify the Vault address to check (defaults to root vault)
+        /// Optionally override which Vault address to check
         #[arg(long)]
         vault_addr: Option<String>,
     },
-    /// Fully automate multi‑tier Vault setup with auto‑unseal and PKI.
-    Setup {
-        /// Root Vault address.
-        #[arg(long, default_value = "http://127.0.0.1:8200", env = "ROOT_VAULT_ADDR")]
+
+    /// (Step 1) Set up the root Vault for auto‐unseal, generating an unwrapped token
+    SetupRoot {
+        /// The root Vault's address (override the CLI default)
+        #[arg(long, default_value = "http://127.0.0.1:8200")]
         root_addr: String,
-        /// Sub Vault address.
-        #[arg(long, default_value = "http://127.0.0.1:8202", env = "SUB_VAULT_ADDR")]
-        sub_addr: String,
-        /// Secret shares for initialization.
+
+        /// Shamir shares & threshold
         #[arg(long, default_value_t = 1)]
         secret_shares: u8,
-        /// Secret threshold for initialization.
+
         #[arg(long, default_value_t = 1)]
         secret_threshold: u8,
-        /// Domain name for PKI setup.
-        #[arg(long, default_value = "example.com")]
-        domain: String,
-        /// TTL for certificates.
-        #[arg(long, default_value = "8760h")]
-        ttl: String,
-        /// Name for auto‑unseal key.
+
+        /// Transit key name
         #[arg(long, default_value = "autounseal-key")]
         key_name: String,
-        /// Optional output file to save credentials.
-        #[arg(long)]
-        output_file: Option<String>,
-        /// Optional root token if the root Vault is already initialized.
-        #[arg(long)]
-        root_token: Option<String>,
-        /// Setup mode: "local" for Docker Compose, "remote" for Kubernetes.
+
+        /// Local or remote mode
         #[arg(long, default_value = "local")]
         mode: String,
+
+        /// Optional output file
+        #[arg(long)]
+        output_file: Option<String>,
+    },
+
+    /// (Step 2) Set up the sub Vault for auto‐unseal + intermediate PKI
+    SetupSub {
+        /// Sub Vault address
+        #[arg(long, default_value = "http://127.0.0.1:8202")]
+        sub_addr: String,
+
+        /// Domain name for PKI
+        #[arg(long, default_value = "example.com")]
+        domain: String,
+
+        /// TTL for PKI certs
+        #[arg(long, default_value = "8760h")]
+        ttl: String,
+
+        /// Root Vault address (if needed to sign the intermediate)
+        #[arg(long)]
+        root_addr: Option<String>,
+
+        /// Root Vault token
+        #[arg(long)]
+        root_token: String,
+    },
+
+    /// Get an unwrapped transit token for auto-unseal from a root vault
+    GetTransitToken {
+        /// The root Vault's address
+        #[arg(long, default_value = "http://127.0.0.1:8200")]
+        root_addr: String,
+
+        /// Root Vault token
+        #[arg(long)]
+        root_token: String,
+
+        /// Transit key name
+        #[arg(long, default_value = "autounseal-key")]
+        key_name: String,
     },
 }
 
-// Implement the VaultInterface trait for handling CLI operations
+// -------------------------------------------------------------------
+// Optionally, your existing VaultCli that implements VaultInterface
+// -------------------------------------------------------------------
 pub struct VaultCli;
 
 #[async_trait]
@@ -95,36 +136,140 @@ impl VaultInterface for VaultCli {
         }
     }
 
-    async fn setup(&self, config: VaultSetupConfig) -> Result<SetupResult, VaultError> {
-        match crate::vault::setup::setup_multi_tier_vault(config).await {
-            Ok(result) => {
-                let setup_result = SetupResult {
-                    root_init: result.root_init,
-                    root_role: result.root_role,
-                    sub_init: crate::vault::AutoUnsealResult {
-                        root_token: result.sub_init.root_token,
-                        recovery_keys: result.sub_init.recovery_keys,
-                        success: true,
-                    },
-                    int_role: result.int_role,
-                };
-                Ok(setup_result)
+    async fn setup_root(
+        &self,
+        addr: &str,
+        secret_shares: u8,
+        secret_threshold: u8,
+        key_name: &str,
+    ) -> Result<String, VaultError> {
+        let config = RootSetupConfig {
+            root_addr: addr.to_string(),
+            secret_shares,
+            secret_threshold,
+            key_name: key_name.to_string(),
+            mode: "local".to_string(),
+            output_file: None,
+        };
+
+        match setup_root_vault(config).await {
+            Ok(RootSetupResult {
+                root_init,
+                unwrapped_token,
+            }) => {
+                info!(
+                    "Root Vault setup is complete. Root token = {}",
+                    root_init.root_token
+                );
+                Ok(unwrapped_token)
             }
-            Err(err) => Err(VaultError::Api(format!("Setup error: {}", err))),
+            Err(e) => Err(VaultError::Api(format!("Root setup error: {}", e))),
         }
+    }
+
+    async fn setup_sub(
+        &self,
+        root_addr: &str,
+        root_token: &str,
+        sub_addr: &str,
+        domain: &str,
+        ttl: &str,
+    ) -> Result<String, VaultError> {
+        let config = SubSetupConfig {
+            sub_addr: sub_addr.to_string(),
+            domain: domain.to_string(),
+            ttl: ttl.to_string(),
+            root_addr: root_addr.to_string(),
+            root_token: root_token.to_string(),
+        };
+
+        match setup_sub_vault(config).await {
+            Ok(SubSetupResult {
+                sub_init,
+                pki_roles,
+            }) => {
+                info!(
+                    "Sub Vault is auto-unsealed: root token = {}",
+                    sub_init.root_token
+                );
+                Ok(pki_roles.1)
+            }
+            Err(e) => Err(VaultError::Api(format!("Sub setup error: {}", e))),
+        }
+    }
+
+    async fn get_unwrapped_transit_token(
+        &self,
+        root_addr: &str,
+        root_token: &str,
+        key_name: &str,
+    ) -> Result<String, VaultError> {
+        // First, ensure transit auto-unseal is set up
+        if let Err(e) =
+            crate::vault::autounseal::setup_transit_autounseal(root_addr, root_token, key_name)
+                .await
+        {
+            return Err(VaultError::Api(format!(
+                "Failed to setup transit auto-unseal: {}",
+                e
+            )));
+        }
+
+        // Generate a wrapped transit token
+        let wrap_ttl = "300s";
+        let wrapped_token = match crate::vault::transit::generate_wrapped_transit_token(
+            root_addr,
+            root_token,
+            "autounseal", // policy name used in setup_transit_autounseal
+            wrap_ttl,
+        )
+        .await
+        {
+            Ok(token) => token,
+            Err(e) => {
+                return Err(VaultError::Api(format!(
+                    "Failed to generate wrapped token: {}",
+                    e
+                )))
+            }
+        };
+
+        // Unwrap the token
+        let unwrapped_token =
+            match crate::vault::autounseal::unwrap_token(root_addr, &wrapped_token).await {
+                Ok(token) => token,
+                Err(e) => return Err(VaultError::Api(format!("Failed to unwrap token: {}", e))),
+            };
+
+        info!("Got unwrapped token for auto-unseal: {}", unwrapped_token);
+
+        Ok(unwrapped_token)
     }
 }
 
+// -------------------------------------------------------------------
+// The CLI entry point (run_cli)
+// -------------------------------------------------------------------
 pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     let vault_cli = VaultCli {};
 
     match cli.command {
+        Commands::List => {
+            info!("Listing known vaults and their status");
+            println!("The database functionality has been removed.");
+            println!(
+                "To check a vault's status, use the 'status' command with a specific address."
+            );
+            return Ok(());
+        }
+
+        // 1) Unseal
         Commands::Unseal { keys, keys_file } => {
             info!("Unsealing Vault at {}", cli.vault_addr);
             let mut unseal_keys = Vec::new();
 
-            // Handle keys from file if provided
+            // if keys_file is provided, read from that
             if let Some(file) = keys_file {
                 let contents = fs::read_to_string(file)?;
                 for line in contents.lines() {
@@ -134,8 +279,7 @@ pub async fn run_cli() -> Result<()> {
                     }
                 }
             }
-
-            // Add keys from command line
+            // Add any keys from command line
             unseal_keys.extend(keys);
 
             if unseal_keys.is_empty() {
@@ -153,6 +297,7 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
+        // 2) Status
         Commands::Status { vault_addr } => {
             let addr = vault_addr.unwrap_or_else(|| cli.vault_addr.clone());
             info!("Checking status of Vault at {}", addr);
@@ -160,72 +305,141 @@ pub async fn run_cli() -> Result<()> {
             match vault_cli.check_status(&addr).await {
                 Ok(status) => {
                     info!(
-                        "Vault Status: Initialized: {}, Sealed: {}, Standby: {}",
+                        "Vault Status: Initialized={}, Sealed={}, Standby={}",
                         status.initialized, status.sealed, status.standby
                     );
-                    if status.initialized && !status.sealed {
-                        info!("Active Node: Yes");
-                    }
                     if !status.initialized {
-                        info!("Vault is not initialized. Run the setup command to initialize and configure the vault.");
+                        info!("Vault is not initialized yet.");
                     } else if status.sealed {
-                        info!("Vault is sealed. Run the unseal command to unseal.");
+                        info!("Vault is sealed. You need to unseal it.");
+                    } else {
+                        info!("Vault is unsealed and ready.");
                     }
                 }
                 Err(e) => {
                     error!("Error checking Vault status: {}", e);
-                    if e.to_string().contains("connect") || e.to_string().contains("connection") {
-                        error!("Connection error: Ensure Vault is running at {}", addr);
-                    }
                     return Err(anyhow::anyhow!("Failed to check Vault status: {}", e));
                 }
             }
         }
 
-        Commands::Setup {
+        // 3) SetupRoot (step 1)
+        Commands::SetupRoot {
             root_addr,
-            sub_addr,
             secret_shares,
             secret_threshold,
-            domain,
-            ttl,
             key_name,
-            output_file,
-            root_token,
             mode,
+            output_file,
         } => {
-            let config = VaultSetupConfig {
+            info!("Running setup-root for Vault at {}", root_addr);
+
+            let config = RootSetupConfig {
                 root_addr,
-                sub_addr,
                 secret_shares,
                 secret_threshold,
-                domain,
-                ttl,
                 key_name,
-                output_file,
-                root_token,
                 mode,
+                output_file,
             };
 
-            match vault_cli.setup(config).await {
-                Ok(result) => {
-                    // Log the results
-                    info!("Root Vault: Root Token: {}", result.root_init.root_token);
-                    if !result.root_init.keys.is_empty() {
-                        info!("Unseal Keys: {:?}", result.root_init.keys);
+            match setup_root_vault(config).await {
+                Ok(RootSetupResult {
+                    root_init,
+                    unwrapped_token,
+                }) => {
+                    info!(
+                        "Root Vault setup is complete. Root token = {}",
+                        root_init.root_token
+                    );
+                    if !root_init.keys.is_empty() {
+                        info!("Root Vault unseal keys: {:?}", root_init.keys);
                     }
-                    info!("PKI Role: {}", result.root_role);
-                    info!("Sub Vault: Root Token: {}", result.sub_init.root_token);
-                    if let Some(recovery_keys) = &result.sub_init.recovery_keys {
-                        info!("Recovery Keys: {:?}", recovery_keys);
-                    }
-                    info!("Intermediate PKI Role: {}", result.int_role);
+                    info!("Unwrapped token for sub Vault = {}", unwrapped_token);
+
+                    info!("Now update your sub Vault environment with that token, ");
+                    info!("then run 'merka-vault setup-sub --sub-addr=...' to continue.");
                 }
-                Err(err) => {
-                    return Err(anyhow::anyhow!("Failed to setup vault: {}", err));
+                Err(e) => {
+                    error!("Failed to set up root vault: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+
+        // 4) SetupSub (step 2)
+        Commands::SetupSub {
+            sub_addr,
+            domain,
+            ttl,
+            root_addr,
+            root_token,
+        } => {
+            info!("Running setup-sub for sub Vault at {}", sub_addr);
+
+            let config = SubSetupConfig {
+                sub_addr,
+                domain,
+                ttl,
+                root_addr: root_addr.unwrap_or(cli.vault_addr.clone()),
+                root_token: root_token.clone(),
+            };
+
+            match setup_sub_vault(config).await {
+                Ok(SubSetupResult {
+                    sub_init,
+                    pki_roles,
+                }) => {
+                    info!(
+                        "Sub Vault is auto-unsealed: root token = {}",
+                        sub_init.root_token
+                    );
+
+                    if let Some(rk) = sub_init.recovery_keys.clone() {
+                        info!("Recovery keys: {:?}", rk);
+                    }
+                    info!(
+                        "Intermediate PKI roles: (root_role=?, int_role={})",
+                        pki_roles.1
+                    );
+                    info!("Setup-sub complete!");
+                }
+                Err(e) => {
+                    error!("Failed to set up sub vault: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+
+        Commands::GetTransitToken {
+            root_addr,
+            root_token,
+            key_name,
+        } => {
+            info!(
+                "Getting unwrapped transit token from root vault at {}",
+                root_addr
+            );
+
+            match vault_cli
+                .get_unwrapped_transit_token(&root_addr, &root_token, &key_name)
+                .await
+            {
+                Ok(unwrapped_token) => {
+                    info!("Successfully obtained unwrapped transit token:");
+                    println!("{}", unwrapped_token);
+                    info!("Use this token when configuring your sub-vault's VAULT_TOKEN environment variable.");
+                }
+                Err(e) => {
+                    error!("Failed to get unwrapped transit token: {}", e);
+                    return Err(anyhow::anyhow!(
+                        "Failed to get unwrapped transit token: {}",
+                        e
+                    ));
                 }
             }
         }
     }
+
     Ok(())
 }

@@ -932,3 +932,79 @@ async fn test_realistic_autounseal_with_wrapped_token() -> Result<(), Box<dyn st
 
     Ok(())
 }
+
+/// Tests the setup of auto-unsealing between two vaults using direct vault interactions:
+/// - Sets up a root vault with transit engine
+/// - Configures transit key and policy
+/// - Creates and unwraps token for auto-unseal
+/// - Starts sub vault with auto-unseal configuration
+#[tokio::test]
+async fn test_direct_vault_autounseal_setup() -> Result<(), Box<dyn std::error::Error>> {
+    init_logging();
+
+    // Start root vault container
+    let root_container = setup_vault_container(common::VaultMode::Regular).await;
+    let root_host = root_container.get_host().await?;
+    let root_port = root_container.get_host_port_ipv4(8200).await?;
+    let root_addr = format!("http://{}:{}", root_host, root_port);
+
+    // Wait for container to be ready
+    sleep(Duration::from_secs(3)).await;
+
+    // Initialize and unseal root vault
+    let init_res = merka_vault::vault::init::init_vault(&root_addr, 1, 1, None, None).await?;
+    assert!(!init_res.root_token.is_empty());
+    merka_vault::vault::init::unseal_vault(&root_addr, &init_res.keys).await?;
+    let root_token = init_res.root_token;
+
+    // Set up transit engine for auto-unseal
+    merka_vault::vault::transit::setup_transit_engine(&root_addr, &root_token).await?;
+    merka_vault::vault::transit::create_transit_key(&root_addr, &root_token, "test-key").await?;
+    merka_vault::vault::transit::create_transit_unseal_policy(
+        &root_addr,
+        &root_token,
+        "autounseal",
+        "test-key",
+    )
+    .await?;
+
+    // Generate and unwrap token for auto-unseal
+    let wrapped_token = merka_vault::vault::transit::generate_wrapped_transit_token(
+        &root_addr,
+        &root_token,
+        "autounseal",
+        "300s",
+    )
+    .await?;
+    let unwrapped_token =
+        merka_vault::vault::autounseal::unwrap_token(&root_addr, &wrapped_token).await?;
+
+    // Get root vault's internal address for auto-unseal configuration
+    let root_internal_host = root_container.get_bridge_ip_address().await?;
+    let root_internal_url = format!("http://{}:8200", root_internal_host);
+
+    // Start sub vault with auto-unseal configuration
+    let sub_container = setup_vault_container(common::VaultMode::AutoUnseal {
+        transit_unseal_url: root_internal_url,
+        token: unwrapped_token.clone(),
+        key_name: "test-key".to_string(),
+    })
+    .await;
+
+    let sub_host = sub_container.get_host().await?;
+    let sub_port = sub_container.get_host_port_ipv4(8200).await?;
+    let sub_addr = format!("http://{}:{}", sub_host, sub_port);
+
+    // Wait for sub container to be ready
+    sleep(Duration::from_secs(3)).await;
+
+    // Initialize sub vault with auto-unseal
+    let sub_init = merka_vault::vault::autounseal::init_with_autounseal(&sub_addr).await?;
+    assert!(!sub_init.root_token.is_empty());
+
+    // Verify sub vault is unsealed
+    let status = merka_vault::vault::common::check_vault_status(&sub_addr).await?;
+    assert!(!status.sealed, "Sub vault should be unsealed");
+
+    Ok(())
+}

@@ -50,9 +50,55 @@
 use crate::vault::{client::VaultClient, InitResult, VaultError};
 use log::{error, info, warn};
 use serde_json::json;
+use tokio;
 
 /// Sets up the transit engine for auto-unseal.
 pub async fn setup_transit_autounseal(
+    vault_addr: &str,
+    token: &str,
+    key_name: &str,
+) -> Result<bool, VaultError> {
+    // Add retry logic for race conditions during testing
+    let max_retries = 5;
+    let mut last_error = None;
+
+    for attempt in 1..=max_retries {
+        log::info!(
+            "Setting up transit engine, attempt {}/{}",
+            attempt,
+            max_retries
+        );
+
+        match setup_transit_engine_internal(vault_addr, token, key_name).await {
+            Ok(_) => {
+                log::info!(
+                    "Successfully set up transit engine after {} attempts",
+                    attempt
+                );
+                return Ok(true);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to set up transit engine (attempt {}/{}): {}",
+                    attempt,
+                    max_retries,
+                    e
+                );
+                last_error = Some(e);
+
+                // Don't sleep on the last attempt
+                if attempt < max_retries {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| VaultError::Api("Max retries exceeded".to_string())))
+}
+
+// Internal function that does the actual setup work
+async fn setup_transit_engine_internal(
     vault_addr: &str,
     token: &str,
     key_name: &str,

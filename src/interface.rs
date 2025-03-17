@@ -1,5 +1,4 @@
 use crate::vault::common::VaultStatus;
-use crate::vault::setup::{SetupResult, VaultSetupConfig};
 use crate::vault::{UnsealResult, VaultError};
 use async_trait::async_trait;
 
@@ -12,6 +11,30 @@ pub trait VaultInterface {
     /// Unseal vault with provided keys
     async fn unseal(&self, addr: &str, keys: Vec<String>) -> Result<UnsealResult, VaultError>;
 
-    /// Setup multi-tier vault with auto-unseal and PKI
-    async fn setup(&self, config: VaultSetupConfig) -> Result<SetupResult, VaultError>;
+    // Setup root vault
+    async fn setup_root(
+        &self,
+        addr: &str,
+        secret_shares: u8,
+        secret_threshold: u8,
+        key_name: &str,
+    ) -> Result<String, VaultError>;
+
+    // Setup sub vault
+    async fn setup_sub(
+        &self,
+        root_addr: &str,
+        root_token: &str,
+        sub_addr: &str,
+        domain: &str,
+        ttl: &str,
+    ) -> Result<String, VaultError>;
+
+    /// Get an unwrapped transit token for auto-unseal
+    async fn get_unwrapped_transit_token(
+        &self,
+        root_addr: &str,
+        root_token: &str,
+        key_name: &str,
+    ) -> Result<String, VaultError>;
 }
