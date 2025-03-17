@@ -40,7 +40,7 @@ async fn test_vault_monitoring_and_listing() -> Result<(), Box<dyn std::error::E
     let (actor, mut rx) = start_vault_actor_with_in_memory_db(&root_addr);
 
     // Drain any existing events from the channel
-    while let Ok(_) = rx.try_recv() {
+    while rx.try_recv().is_ok() {
         // Just discard any events that might be in the channel
     }
 

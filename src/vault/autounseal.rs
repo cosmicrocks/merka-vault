@@ -252,7 +252,7 @@ pub async fn init_with_autounseal(vault_addr: &str) -> Result<InitResult, VaultE
 
     // Initialize with auto-unseal config (no unseal keys, only recovery keys)
     let response = client
-        .put(&format!("{}/v1/sys/init", vault_addr))
+        .put(format!("{}/v1/sys/init", vault_addr))
         .json(&json!({
             "recovery_shares": 5,
             "recovery_threshold": 3,
@@ -318,7 +318,7 @@ pub async fn init_with_autounseal(vault_addr: &str) -> Result<InitResult, VaultE
         }
         403 => {
             error!("Permission denied during auto-unseal initialization");
-            Err(VaultError::Api(format!("Permission denied")))
+            Err(VaultError::Api("Permission denied".to_string()))
         }
         503 => {
             error!("Vault sealed error during auto-unseal initialization");
@@ -374,7 +374,7 @@ pub async fn unwrap_token(vault_addr: &str, wrapped_token: &str) -> Result<Strin
 
     // Unwrap the token - this doesn't require authentication as the wrap token itself is the auth
     let response = client
-        .post(&format!("{}/v1/sys/wrapping/unwrap", vault_addr))
+        .post(format!("{}/v1/sys/wrapping/unwrap", vault_addr))
         .header("X-Vault-Token", wrapped_token)
         .send()
         .await
