@@ -31,6 +31,7 @@ fmt:
 
 fix:
     cargo fmt --all -- --check --verbose --color=always
+    cargo clippy --fix --all-targets -- -D warnings
 
 # Clean build artifacts
 clean:

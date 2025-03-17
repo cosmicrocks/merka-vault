@@ -377,7 +377,7 @@ impl Handler<UnsealVault> for VaultActor {
     type Result = ResponseFuture<Result<UnsealResult, VaultError>>;
 
     fn handle(&mut self, msg: UnsealVault, _ctx: &mut Context<Self>) -> Self::Result {
-        let mut actor = self.clone();
+        let actor = self.clone();
         let addr = actor.vault_addr.clone();
         async move { actor.unseal(&addr, msg.keys).await }.boxed_local()
     }
@@ -476,7 +476,7 @@ impl Handler<SetupRoot> for VaultActor {
                     }
 
                     // Here, we return the unwrapped token for auto-unseal
-                    return Ok(result.unwrapped_token);
+                    Ok(result.unwrapped_token)
                 }
                 Err(e) => Err(VaultError::Api(format!("Root setup error: {}", e))),
             }
