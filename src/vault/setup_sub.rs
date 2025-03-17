@@ -62,7 +62,7 @@ pub async fn setup_sub_vault(config: SubSetupConfig) -> Result<SubSetupResult> {
         "Setting up intermediate PKI on sub vault. Root vault at {}",
         root_addr
     );
-    let (int_cert, int_role) = pki::setup_pki_intermediate(
+    let (_int_cert, int_role) = pki::setup_pki_intermediate(
         &root_addr,
         &root_token,
         &sub_addr,

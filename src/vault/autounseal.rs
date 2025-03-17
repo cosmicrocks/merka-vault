@@ -339,7 +339,7 @@ pub async fn generate_wrapped_transit_unseal_token(
     vault_addr: &str,
     token: &str,
     policy_name: &str,
-    ttl: u32,
+    _ttl: u32,
 ) -> Result<String, VaultError> {
     let client = VaultClient::new(vault_addr, token)?;
 

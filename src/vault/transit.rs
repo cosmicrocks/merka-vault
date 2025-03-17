@@ -72,7 +72,7 @@ pub async fn setup_transit_engine(vault_addr: &str, token: &str) -> Result<(), V
     // Handle specific error cases - it's OK if transit is already enabled
     match response {
         Ok(_) => Ok(()),
-        Err(VaultError::HttpStatus(status, error_text))
+        Err(VaultError::HttpStatus(_status, error_text))
             if error_text.contains("path is already in use") =>
         {
             log::info!("Transit engine already enabled, continuing");
@@ -117,7 +117,7 @@ pub async fn create_transit_key(
     // Handle specific error cases - it's OK if key already exists
     match response {
         Ok(_) => Ok(()),
-        Err(VaultError::HttpStatus(status, error_text))
+        Err(VaultError::HttpStatus(_status, error_text))
             if error_text.contains("already exists") =>
         {
             log::info!("Transit key '{}' already exists, continuing", key_name);

@@ -555,10 +555,13 @@ async fn test_setup_transit_autounseal() -> Result<(), Box<dyn std::error::Error
     .await;
 
     // This might fail in test environment due to container networking constraints
-    if let Ok(_) = config_result {
-        info!("Successfully configured vault for auto-unseal");
-    } else {
-        info!("Auto-unseal configuration expected to fail in test environment");
+    match config_result {
+        Ok(_) => {
+            info!("Successfully configured vault for auto-unseal");
+        }
+        _ => {
+            info!("Auto-unseal configuration expected to fail in test environment");
+        }
     }
 
     Ok(())
@@ -669,41 +672,43 @@ async fn test_auto_unseal_integration() -> Result<(), Box<dyn std::error::Error>
     )
     .await;
 
-    if let Ok(_) = config_result {
-        // Initialize with auto-unseal
-        if let Ok(init_response) =
-            merka_vault::vault::autounseal::init_with_autounseal(&target_url).await
-        {
-            let root_token = init_response.root_token;
+    match config_result {
+        Ok(_) => {
+            if let Ok(init_response) =
+                merka_vault::vault::autounseal::init_with_autounseal(&target_url).await
+            {
+                let root_token = init_response.root_token;
 
-            // Test that we can perform operations on the auto-unsealed Vault
-            // Setup PKI after auto-unseal initialization
-            let domain = "autounseal-example.com";
-            let ttl = "8760h";
-            let pki_result = merka_vault::vault::pki::setup_pki(
-                &target_url,
-                &root_token,
-                domain,
-                ttl,
-                false,
-                None,
-                None,
-            )
-            .await;
+                // Test that we can perform operations on the auto-unsealed Vault
+                // Setup PKI after auto-unseal initialization
+                let domain = "autounseal-example.com";
+                let ttl = "8760h";
+                let pki_result = merka_vault::vault::pki::setup_pki(
+                    &target_url,
+                    &root_token,
+                    domain,
+                    ttl,
+                    false,
+                    None,
+                    None,
+                )
+                .await;
 
-            match pki_result {
-                Ok((cert, role_name)) => {
-                    info!("Successfully set up PKI on auto-unsealed Vault");
-                    assert!(cert.contains("BEGIN CERTIFICATE"));
-                    assert_eq!(role_name, domain.replace('.', "-"));
-                }
-                Err(e) => {
-                    info!("PKI setup failed (may be expected): {}", e);
+                match pki_result {
+                    Ok((cert, role_name)) => {
+                        info!("Successfully set up PKI on auto-unsealed Vault");
+                        assert!(cert.contains("BEGIN CERTIFICATE"));
+                        assert_eq!(role_name, domain.replace('.', "-"));
+                    }
+                    Err(e) => {
+                        info!("PKI setup failed (may be expected): {}", e);
+                    }
                 }
             }
         }
-    } else {
-        info!("Auto-unseal configuration failed (expected in test environment)");
+        _ => {
+            info!("Auto-unseal configuration failed (expected in test environment)");
+        }
     }
 
     Ok(())
@@ -781,26 +786,27 @@ async fn test_wrapped_token_autounseal() -> Result<(), Box<dyn std::error::Error
     )
     .await;
 
-    if let Ok(_) = config_result {
-        info!("Successfully configured vault for auto-unseal using unwrapped token");
-
-        // Initialize with auto-unseal
-        let init_result = merka_vault::vault::autounseal::init_with_autounseal(&target_url).await;
-
-        if let Ok(init_response) = init_result {
-            info!(
-                "Auto-unseal initialized with recovery keys: {}",
-                init_response.recovery_keys.unwrap_or_default().len()
-            );
-            assert!(!init_response.root_token.is_empty());
-        } else {
-            info!(
-                "Auto-unseal initialization failed (expected in test): {:?}",
-                init_result
-            );
+    match config_result {
+        Ok(_) => {
+            info!("Successfully configured vault for auto-unseal using unwrapped token");
+            let init_result =
+                merka_vault::vault::autounseal::init_with_autounseal(&target_url).await;
+            if let Ok(init_response) = init_result {
+                info!(
+                    "Auto-unseal initialized with recovery keys: {}",
+                    init_response.recovery_keys.unwrap_or_default().len()
+                );
+                assert!(!init_response.root_token.is_empty());
+            } else {
+                info!(
+                    "Auto-unseal initialization failed (expected in test): {:?}",
+                    init_result
+                );
+            }
         }
-    } else {
-        info!("Auto-unseal configuration failed (expected in test environment)");
+        _ => {
+            info!("Auto-unseal configuration failed (expected in test environment)");
+        }
     }
 
     Ok(())
