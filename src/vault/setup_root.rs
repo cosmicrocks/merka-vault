@@ -75,10 +75,11 @@ pub async fn setup_root_vault(config: RootSetupConfig) -> Result<RootSetupResult
         }
         init_result
     } else {
-        info!("Root vault is already initialized. Provide the root token or retrieve it from DB.");
-        // If you're storing tokens in DB, you can load them. For example:
+        info!("Root vault is already initialized. Provide the root token.");
         // If you do not have the user-supplied token, we can error:
-        return Err(anyhow!("Root vault is already initialized; please provide root token or use DB to retrieve it."));
+        return Err(anyhow!(
+            "Root vault is already initialized; please provide root token."
+        ));
     };
 
     // ensure it's unsealed

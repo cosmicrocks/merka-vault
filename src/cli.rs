@@ -257,10 +257,7 @@ pub async fn run_cli() -> Result<()> {
     match cli.command {
         Commands::List => {
             info!("Listing known vaults and their status");
-            println!("The database functionality has been removed.");
-            println!(
-                "To check a vault's status, use the 'status' command with a specific address."
-            );
+            info!("To check a vault's status, use the 'status' command with a specific address.");
             return Ok(());
         }
 
