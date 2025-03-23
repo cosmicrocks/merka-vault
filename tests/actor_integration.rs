@@ -4,8 +4,10 @@ mod common;
 use actix_rt::time::{sleep, timeout};
 use common::{init_logging, setup_vault_container, VaultMode};
 use log::{error, info};
-use merka_vault::actor::{self, AutoUnseal, InitVault, VaultEvent};
-use merka_vault::vault::VaultError;
+use merka_vault::actor::{
+    self, ActorError, AutoUnseal, CheckStatus, GenerateWrappedToken, InitVault, SetupTransit,
+    UnsealVault, UnwrapToken, VaultEvent, VerifyTokenPermissions,
+};
 use std::time::Duration;
 
 /// Demonstrates passing an **unwrapped** token (rather than root) to the target Vault's
@@ -95,31 +97,45 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     // Unseal the unsealer vault with the returned key
     info!("Unsealing the unsealer vault...");
     if let Some(unseal_key) = unsealer_keys.first() {
-        let client = reqwest::Client::new();
-        let resp = client
-            .put(format!("{}/v1/sys/unseal", unsealer_url))
-            .json(&serde_json::json!({ "key": unseal_key }))
-            .send()
-            .await?;
+        // Replace direct reqwest unseal call with actor message
+        match unsealer_addr
+            .send(UnsealVault {
+                keys: vec![unseal_key.clone()],
+            })
+            .await
+        {
+            Ok(Ok(unseal_result)) => {
+                if !unseal_result.sealed {
+                    info!("✅ Unsealer vault unsealed successfully");
+                } else {
+                    return Err(
+                        "Unsealer vault reports it's still sealed after unseal operation".into(),
+                    );
+                }
+            }
+            Ok(Err(e)) => return Err(format!("Failed to unseal vault: {e}").into()),
+            Err(e) => {
+                return Err(format!("Failed to send UnsealVault message to actor: {e}").into())
+            }
+        }
 
-        if resp.status().is_success() {
-            info!("✅ Unsealer vault unsealed successfully");
-
-            // Verify unsealed status with an additional check
-            let status_resp = client
-                .get(format!("{}/v1/sys/seal-status", unsealer_url))
-                .send()
-                .await?;
-
-            let status = status_resp.json::<serde_json::Value>().await?;
-            if status["sealed"].as_bool().unwrap_or(true) {
-                return Err(
-                    "Unsealer vault reports it's still sealed after unseal operation".into(),
+        // Verify unsealed status with status check via actor
+        match unsealer_addr.send(CheckStatus).await {
+            Ok(Ok(status)) => {
+                if status.sealed {
+                    return Err(
+                        "Unsealer vault reports it's still sealed after unseal operation".into(),
+                    );
+                }
+                info!(
+                    "✅ Confirmed unseal with status check: sealed={}",
+                    status.sealed
                 );
             }
-        } else {
-            let body = resp.text().await?;
-            return Err(format!("Failed to unseal unsealer vault: {body}").into());
+            Ok(Err(e)) => return Err(format!("Failed to check vault status: {e}").into()),
+            Err(e) => {
+                return Err(format!("Failed to send CheckStatus message to actor: {e}").into())
+            }
         }
     } else {
         return Err("No unseal keys received from initialization".into());
@@ -131,7 +147,6 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
 
     // Instead of calling autounseal::setup_transit_autounseal directly,
     // use the actor pattern with SetupTransit message
-    use merka_vault::actor::SetupTransit;
     match unsealer_addr
         .send(SetupTransit {
             key_name: transit_key_name.to_string(),
@@ -152,7 +167,6 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     let wrap_ttl = "300s"; // 5 minutes TTL for the wrapped token
 
     // Generate wrapped token using the actor interface
-    use merka_vault::actor::GenerateWrappedToken;
     let wrapped_token = match unsealer_addr
         .send(GenerateWrappedToken {
             policy_name: policy_name.to_string(),
@@ -172,7 +186,6 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     };
 
     // Unwrap the token using the actor interface
-    use merka_vault::actor::UnwrapToken;
     let real_client_token = match unsealer_addr
         .send(UnwrapToken {
             wrapped_token: wrapped_token.clone(),
@@ -189,24 +202,22 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
 
     // Verify token has correct permissions by testing a simple encrypt operation
     info!("Verifying token permissions...");
-    let client = reqwest::Client::new();
-    let encrypt_resp = client
-        .post(format!(
-            "{}/v1/transit/encrypt/{}",
-            unsealer_url, transit_key_name
-        ))
-        .header("X-Vault-Token", &real_client_token)
-        .json(&serde_json::json!({
-            "plaintext": "dGVzdA==" // Base64 encoded "test"
-        }))
-        .send()
-        .await?;
-
-    if !encrypt_resp.status().is_success() {
-        let body = encrypt_resp.text().await?;
-        return Err(format!("Token permission verification failed: {body}").into());
+    // Instead of direct encrypt call, use the actor to verify token permissions
+    match unsealer_addr
+        .send(VerifyTokenPermissions {
+            token: real_client_token.clone(),
+            key_name: transit_key_name.to_string(),
+        })
+        .await
+    {
+        Ok(Ok(_)) => info!("✅ Token permissions verified successfully"),
+        Ok(Err(e)) => return Err(format!("Token permission verification failed: {e}").into()),
+        Err(e) => {
+            return Err(
+                format!("Failed to send VerifyTokenPermissions message to actor: {e}").into(),
+            )
+        }
     }
-    info!("✅ Token permissions verified successfully");
 
     // --- STAGE 5: Spin up target vault in AutoUnseal mode with unwrapped token ---
     info!("STAGE 5: Starting target vault in AutoUnseal mode");
@@ -247,14 +258,14 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
         // Use the actor's AutoUnseal message
         match target_addr.send(AutoUnseal {}).await {
             Ok(result) => result,
-            Err(e) => Err(VaultError::Api(format!(
+            Err(e) => Err(ActorError::VaultApi(format!(
                 "Failed to send AutoUnseal message: {e}"
             ))),
         }
     })
     .await;
 
-    let auto_unseal_result = match auto_unseal_result {
+    let _auto_unseal_result = match auto_unseal_result {
         Ok(Ok(result)) => {
             info!("✅ Target auto-unseal initialization succeeded via actor");
             info!("  - Root token: {}", result.root_token);
@@ -300,39 +311,34 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
 
     // Verify token is valid by making a simple API call
     info!("Verifying root token from auto-unsealed vault...");
-    let token_verification = reqwest::Client::new()
-        .get(format!("{}/v1/sys/health", target_url))
-        .header("X-Vault-Token", &auto_unseal_result.root_token)
-        .send()
-        .await?;
-
-    if !token_verification.status().is_success() {
-        return Err("Root token from auto-unsealed vault failed verification".into());
+    // Use the actor instead of direct API call - the token is stored in the actor instance
+    match target_addr.send(CheckStatus).await {
+        Ok(Ok(_)) => info!("✅ Root token verified successfully"),
+        Ok(Err(e)) => return Err(format!("Root token verification failed: {e}").into()),
+        Err(e) => return Err(format!("Failed to send CheckStatus message to actor: {e}").into()),
     }
-    info!("✅ Root token verified successfully");
 
     // Verify the target vault is unsealed
     info!("Checking seal status of target vault...");
-    let status_resp = reqwest::Client::new()
-        .get(format!("{}/v1/sys/seal-status", &target_url))
-        .send()
-        .await?;
-
-    let status_json = status_resp.json::<serde_json::Value>().await?;
-    info!(
-        "Target seal-status: {}",
-        serde_json::to_string_pretty(&status_json)?
-    );
+    // Use the actor's CheckStatus instead of direct API call
+    let status = match target_addr.send(CheckStatus).await {
+        Ok(Ok(s)) => {
+            info!(
+                "Target seal status: initialized={}, sealed={}, standby={}",
+                s.initialized, s.sealed, s.standby
+            );
+            s
+        }
+        Ok(Err(e)) => return Err(format!("Failed to check seal status: {e}").into()),
+        Err(e) => return Err(format!("Failed to send CheckStatus message to actor: {e}").into()),
+    };
 
     // Assertions to verify test success
     assert!(
-        !status_json["sealed"].as_bool().unwrap_or(true),
+        !status.sealed,
         "Target vault is still sealed after auto-unseal"
     );
-    assert!(
-        status_json["initialized"].as_bool().unwrap_or(false),
-        "Target vault is not initialized"
-    );
+    assert!(status.initialized, "Target vault is not initialized");
 
     info!("✅ SUCCESS: Target vault is initialized and auto-unsealed using real unwrapped token!");
 

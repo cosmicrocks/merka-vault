@@ -14,6 +14,49 @@ use crate::vault::setup_root::{setup_root_vault, RootSetupConfig};
 use crate::vault::setup_sub::{setup_sub_vault, SubSetupConfig, SubSetupResult};
 use crate::vault::{AutoUnsealResult, PkiResult, VaultError};
 
+/// Error type for the actor module
+#[derive(Debug, thiserror::Error)]
+pub enum ActorError {
+    #[error("Vault API error: {0}")]
+    VaultApi(String),
+
+    #[error("Network error: {0}")]
+    Network(String),
+
+    #[error("Actor operation failed: {0}")]
+    Operation(String),
+
+    #[error("Actor message handling failed: {0}")]
+    Messaging(String),
+
+    #[error("Timeout: {0}")]
+    Timeout(String),
+}
+
+/// Add conversion from VaultError to ActorError
+impl From<VaultError> for ActorError {
+    fn from(error: VaultError) -> Self {
+        match error {
+            VaultError::Api(msg) => ActorError::VaultApi(msg),
+            VaultError::ApiError(msg) => ActorError::VaultApi(msg),
+            VaultError::Network(msg) => ActorError::Network(msg),
+            VaultError::Connection(msg) => ActorError::Network(msg),
+            VaultError::ParseError(msg) => ActorError::VaultApi(format!("Parse error: {}", msg)),
+            VaultError::Parsing(msg) => ActorError::VaultApi(format!("Parsing error: {}", msg)),
+            VaultError::HttpStatus(code, msg) => {
+                ActorError::VaultApi(format!("HTTP {}: {}", code, msg))
+            }
+            VaultError::AlreadyInitialized => {
+                ActorError::VaultApi("Vault is already initialized".to_string())
+            }
+            VaultError::Sealed(msg) => ActorError::VaultApi(format!("Vault is sealed: {}", msg)),
+            VaultError::RequestError(msg) => ActorError::Network(format!("Request error: {}", msg)),
+            VaultError::Reqwest(err) => ActorError::Network(format!("Reqwest error: {}", err)),
+            VaultError::Json(err) => ActorError::VaultApi(format!("JSON error: {}", err)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultHealth {
     pub addr: String,
@@ -65,6 +108,14 @@ pub enum VaultEvent {
     TransitTokenUnwrapped {
         root_addr: String,
         unwrapped_token: String,
+    },
+    TokenVerified {
+        valid: bool,
+        message: String,
+    },
+    TransitSetup {
+        success: bool,
+        key_name: String,
     },
 }
 
@@ -346,14 +397,14 @@ impl VaultOperations for VaultActor {
 
 /// Message for initializing a Vault with shares & threshold
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<InitResult, VaultError>")]
+#[rtype(result = "Result<InitResult, ActorError>")]
 pub struct InitVault {
     pub secret_shares: u8,
     pub secret_threshold: u8,
 }
 
 impl Handler<InitVault> for VaultActor {
-    type Result = ResponseFuture<Result<InitResult, VaultError>>;
+    type Result = ResponseFuture<Result<InitResult, ActorError>>;
 
     fn handle(&mut self, msg: InitVault, _ctx: &mut Context<Self>) -> Self::Result {
         let mut actor = self.clone();
@@ -361,75 +412,89 @@ impl Handler<InitVault> for VaultActor {
             actor
                 .initialize(msg.secret_shares, msg.secret_threshold)
                 .await
+                .map_err(ActorError::from)
         }
         .boxed_local()
     }
 }
 
-/// Message for unsealing
+/// Message for unsealing a Vault
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<UnsealResult, VaultError>")]
+#[rtype(result = "Result<UnsealResult, ActorError>")]
 pub struct UnsealVault {
     pub keys: Vec<String>,
 }
 
 impl Handler<UnsealVault> for VaultActor {
-    type Result = ResponseFuture<Result<UnsealResult, VaultError>>;
+    type Result = ResponseFuture<Result<UnsealResult, ActorError>>;
 
     fn handle(&mut self, msg: UnsealVault, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
         let addr = actor.vault_addr.clone();
-        async move { actor.unseal(&addr, msg.keys).await }.boxed_local()
+        async move {
+            actor
+                .unseal(&addr, msg.keys)
+                .await
+                .map_err(ActorError::from)
+        }
+        .boxed_local()
     }
 }
 
 /// Message for checking status
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<VaultStatus, VaultError>")]
+#[rtype(result = "Result<VaultStatus, ActorError>")]
 pub struct CheckStatus;
 
 impl Handler<CheckStatus> for VaultActor {
-    type Result = ResponseFuture<Result<VaultStatus, VaultError>>;
+    type Result = ResponseFuture<Result<VaultStatus, ActorError>>;
 
-    fn handle(&mut self, _msg: CheckStatus, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, _: CheckStatus, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
-        async move { actor.status().await }.boxed_local()
+        let addr = actor.vault_addr.clone();
+        async move { actor.check_status(&addr).await.map_err(ActorError::from) }.boxed_local()
     }
 }
 
 /// Message for simple PKI
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<PkiResult, VaultError>")]
+#[rtype(result = "Result<PkiResult, ActorError>")]
 pub struct SetupPki {
     pub role_name: String,
 }
 
 impl Handler<SetupPki> for VaultActor {
-    type Result = ResponseFuture<Result<PkiResult, VaultError>>;
+    type Result = ResponseFuture<Result<PkiResult, ActorError>>;
 
     fn handle(&mut self, msg: SetupPki, _ctx: &mut Context<Self>) -> Self::Result {
         let mut actor = self.clone();
-        async move { actor.setup_pki(msg.role_name).await }.boxed_local()
+        async move {
+            actor
+                .setup_pki(msg.role_name)
+                .await
+                .map_err(ActorError::from)
+        }
+        .boxed_local()
     }
 }
 
 /// Message for auto-unseal
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<AutoUnsealResult, VaultError>")]
+#[rtype(result = "Result<AutoUnsealResult, ActorError>")]
 pub struct AutoUnseal;
 
 impl Handler<AutoUnseal> for VaultActor {
-    type Result = ResponseFuture<Result<AutoUnsealResult, VaultError>>;
+    type Result = ResponseFuture<Result<AutoUnsealResult, ActorError>>;
 
     fn handle(&mut self, _msg: AutoUnseal, _ctx: &mut Context<Self>) -> Self::Result {
         let mut actor = self.clone();
-        async move { actor.auto_unseal(None).await }.boxed_local()
+        async move { actor.auto_unseal(None).await.map_err(ActorError::from) }.boxed_local()
     }
 }
 
 // Add new messages for setup operations
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<String, VaultError>")]
+#[rtype(result = "Result<String, ActorError>")]
 pub struct SetupRoot {
     pub addr: String,
     pub secret_shares: u8,
@@ -438,7 +503,7 @@ pub struct SetupRoot {
 }
 
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<String, VaultError>")]
+#[rtype(result = "Result<String, ActorError>")]
 pub struct SetupSub {
     pub root_addr: String,
     pub root_token: String,
@@ -448,7 +513,7 @@ pub struct SetupSub {
 }
 
 impl Handler<SetupRoot> for VaultActor {
-    type Result = ResponseFuture<Result<String, VaultError>>;
+    type Result = ResponseFuture<Result<String, ActorError>>;
 
     fn handle(&mut self, msg: SetupRoot, _ctx: &mut Context<Self>) -> Self::Result {
         let mut actor = self.clone();
@@ -478,7 +543,7 @@ impl Handler<SetupRoot> for VaultActor {
                     // Here, we return the unwrapped token for auto-unseal
                     Ok(result.unwrapped_token)
                 }
-                Err(e) => Err(VaultError::Api(format!("Root setup error: {}", e))),
+                Err(e) => Err(ActorError::VaultApi(format!("Root setup error: {}", e))),
             }
         }
         .boxed_local()
@@ -486,7 +551,7 @@ impl Handler<SetupRoot> for VaultActor {
 }
 
 impl Handler<SetupSub> for VaultActor {
-    type Result = ResponseFuture<Result<String, VaultError>>;
+    type Result = ResponseFuture<Result<String, ActorError>>;
 
     fn handle(&mut self, msg: SetupSub, _ctx: &mut Context<Self>) -> Self::Result {
         let mut actor = self.clone();
@@ -519,7 +584,7 @@ impl Handler<SetupSub> for VaultActor {
                     }
                     Ok(int_role)
                 }
-                Err(e) => Err(VaultError::Api(format!("Sub setup error: {}", e))),
+                Err(e) => Err(ActorError::VaultApi(format!("Sub setup error: {}", e))),
             }
         }
         .boxed_local()
@@ -528,7 +593,7 @@ impl Handler<SetupSub> for VaultActor {
 
 // Add new message type for getting an unwrapped transit token
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<String, VaultError>")]
+#[rtype(result = "Result<String, ActorError>")]
 pub struct GetUnwrappedTransitToken {
     pub root_addr: String,
     pub root_token: String,
@@ -536,7 +601,7 @@ pub struct GetUnwrappedTransitToken {
 }
 
 impl Handler<GetUnwrappedTransitToken> for VaultActor {
-    type Result = ResponseFuture<Result<String, VaultError>>;
+    type Result = ResponseFuture<Result<String, ActorError>>;
 
     fn handle(&mut self, msg: GetUnwrappedTransitToken, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
@@ -554,7 +619,7 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
             )
             .await
             {
-                return Err(VaultError::Api(format!(
+                return Err(ActorError::VaultApi(format!(
                     "Failed to setup transit auto-unseal: {}",
                     e
                 )));
@@ -572,7 +637,7 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
             {
                 Ok(token) => token,
                 Err(e) => {
-                    return Err(VaultError::Api(format!(
+                    return Err(ActorError::VaultApi(format!(
                         "Failed to generate wrapped token: {}",
                         e
                     )))
@@ -587,7 +652,12 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
             .await
             {
                 Ok(token) => token,
-                Err(e) => return Err(VaultError::Api(format!("Failed to unwrap token: {}", e))),
+                Err(e) => {
+                    return Err(ActorError::VaultApi(format!(
+                        "Failed to unwrap token: {}",
+                        e
+                    )))
+                }
             };
 
             log::debug!("Successfully obtained unwrapped transit token");
@@ -608,16 +678,16 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
 
 // Add these new message types after the existing actor message definitions
 
-/// Message for setting up transit engine for auto-unseal
+/// Message for setting up transit auto-unseal
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<bool, VaultError>")]
+#[rtype(result = "Result<String, ActorError>")]
 pub struct SetupTransit {
-    pub key_name: String,
     pub token: String,
+    pub key_name: String,
 }
 
 impl Handler<SetupTransit> for VaultActor {
-    type Result = ResponseFuture<Result<bool, VaultError>>;
+    type Result = ResponseFuture<Result<String, ActorError>>;
 
     fn handle(&mut self, msg: SetupTransit, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
@@ -631,13 +701,21 @@ impl Handler<SetupTransit> for VaultActor {
             )
             .await
             {
-                Ok(result) => Ok(result),
+                Ok(_result) => {
+                    if let Some(sender) = &actor.event_sender {
+                        let _ = sender.send(VaultEvent::TransitSetup {
+                            success: true,
+                            key_name: msg.key_name.clone(),
+                        });
+                    }
+                    Ok(msg.key_name)
+                }
                 Err(e) => {
                     if let Some(sender) = &actor.event_sender {
                         let _ =
                             sender.send(VaultEvent::Error(format!("Transit setup error: {}", e)));
                     }
-                    Err(VaultError::Api(format!("Transit setup error: {}", e)))
+                    Err(ActorError::from(e))
                 }
             }
         }
@@ -647,7 +725,7 @@ impl Handler<SetupTransit> for VaultActor {
 
 /// Message for generating a wrapped transit token
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<String, VaultError>")]
+#[rtype(result = "Result<String, ActorError>")]
 pub struct GenerateWrappedToken {
     pub policy_name: String,
     pub wrap_ttl: String,
@@ -655,13 +733,12 @@ pub struct GenerateWrappedToken {
 }
 
 impl Handler<GenerateWrappedToken> for VaultActor {
-    type Result = ResponseFuture<Result<String, VaultError>>;
+    type Result = ResponseFuture<Result<String, ActorError>>;
 
     fn handle(&mut self, msg: GenerateWrappedToken, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
         let addr = actor.vault_addr.clone();
 
-        // Use the provided token
         async move {
             match crate::vault::transit::generate_wrapped_transit_token(
                 &addr,
@@ -679,10 +756,7 @@ impl Handler<GenerateWrappedToken> for VaultActor {
                             e
                         )));
                     }
-                    Err(VaultError::Api(format!(
-                        "Wrapped token generation error: {}",
-                        e
-                    )))
+                    Err(ActorError::from(e))
                 }
             }
         }
@@ -692,13 +766,13 @@ impl Handler<GenerateWrappedToken> for VaultActor {
 
 /// Message for unwrapping a token
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<String, VaultError>")]
+#[rtype(result = "Result<String, ActorError>")]
 pub struct UnwrapToken {
     pub wrapped_token: String,
 }
 
 impl Handler<UnwrapToken> for VaultActor {
-    type Result = ResponseFuture<Result<String, VaultError>>;
+    type Result = ResponseFuture<Result<String, ActorError>>;
 
     fn handle(&mut self, msg: UnwrapToken, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
@@ -720,11 +794,83 @@ impl Handler<UnwrapToken> for VaultActor {
                         let _ =
                             sender.send(VaultEvent::Error(format!("Token unwrap error: {}", e)));
                     }
-                    Err(VaultError::Api(format!("Token unwrap error: {}", e)))
+                    Err(ActorError::from(e))
                 }
             }
         }
         .boxed_local()
+    }
+}
+
+/// Message for verifying token permissions
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<bool, ActorError>")]
+pub struct VerifyTokenPermissions {
+    pub token: String,
+    pub key_name: String,
+}
+
+impl Handler<VerifyTokenPermissions> for VaultActor {
+    type Result = ResponseFuture<Result<bool, ActorError>>;
+
+    fn handle(&mut self, msg: VerifyTokenPermissions, _: &mut Context<Self>) -> Self::Result {
+        let actor = self.clone();
+        let addr = actor.vault_addr.clone();
+
+        Box::pin(async move {
+            // Try a simple encryption operation to verify the token has the correct permissions
+            let client = reqwest::Client::new();
+            let encrypt_resp = client
+                .post(format!("{}/v1/transit/encrypt/{}", addr, msg.key_name))
+                .header("X-Vault-Token", &msg.token)
+                .json(&serde_json::json!({
+                    "plaintext": "dGVzdA==" // Base64 encoded "test"
+                }))
+                .send()
+                .await;
+
+            match encrypt_resp {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        // Successfully accessed a path that requires root permissions
+                        if let Some(sender) = &actor.event_sender {
+                            let _ = sender.send(VaultEvent::TokenVerified {
+                                valid: true,
+                                message: "Token has transit permissions".into(),
+                            });
+                        }
+                        Ok(true)
+                    } else {
+                        let body = resp
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown error".to_string());
+                        if let Some(sender) = &actor.event_sender {
+                            let _ = sender.send(VaultEvent::TokenVerified {
+                                valid: false,
+                                message: format!("Token verification failed: {}", body),
+                            });
+                        }
+                        Err(ActorError::VaultApi(format!(
+                            "Token permission verification failed: {}",
+                            body
+                        )))
+                    }
+                }
+                Err(e) => {
+                    if let Some(sender) = &actor.event_sender {
+                        let _ = sender.send(VaultEvent::TokenVerified {
+                            valid: false,
+                            message: format!("Token verification failed: {}", e),
+                        });
+                    }
+                    Err(ActorError::Network(format!(
+                        "Token verification request failed: {}",
+                        e
+                    )))
+                }
+            }
+        })
     }
 }
 
