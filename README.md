@@ -8,6 +8,7 @@ A Rust-based tool for managing and automating HashiCorp Vault operations.
 - Unseal Vault instances
 - Set up PKI infrastructure
 - Auto-unseal support
+- Interactive setup wizard
 
 ## CLI Usage
 
@@ -22,6 +23,21 @@ merka-vault [OPTIONS] [COMMAND]
 - `-h, --help`: Display help information
 
 ### Commands
+
+#### setup
+
+Run the interactive setup wizard to configure vaults.
+
+```
+merka-vault setup
+```
+
+This wizard will:
+
+- Detect if you're running vaults locally (via Docker or direct install)
+- Guide you through root and sub vault configuration
+- Automatically set up auto-unsealing
+- Configure PKI infrastructure
 
 #### init
 
@@ -110,13 +126,12 @@ just compose-up
 just build
 cargo build --all
 
-# Setup root vault
+# Setup vaults with the interactive wizard (recommended)
+./target/debug/merka-vault setup
+
+# Alternatively, use the individual commands
 ./target/debug/merka-vault setup-root
-
-# Configure sub vault auto-unseal
-VAULT_TOKEN=<UNWRAPPED_TOKEN> && docker-compose up -d sub-vault
-
-# Setup sub vault
+VAULT_TOKEN=<UNWRAPPED_TOKEN> docker-compose up -d sub-vault
 ./target/debug/merka-vault setup-sub --root-token <ROOT_TOKEN>
 ```
 
