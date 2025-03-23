@@ -606,6 +606,128 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
     }
 }
 
+// Add these new message types after the existing actor message definitions
+
+/// Message for setting up transit engine for auto-unseal
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<bool, VaultError>")]
+pub struct SetupTransit {
+    pub key_name: String,
+    pub token: String,
+}
+
+impl Handler<SetupTransit> for VaultActor {
+    type Result = ResponseFuture<Result<bool, VaultError>>;
+
+    fn handle(&mut self, msg: SetupTransit, _ctx: &mut Context<Self>) -> Self::Result {
+        let actor = self.clone();
+        let addr = actor.vault_addr.clone();
+
+        async move {
+            match crate::vault::autounseal::setup_transit_autounseal(
+                &addr,
+                &msg.token,
+                &msg.key_name,
+            )
+            .await
+            {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    if let Some(sender) = &actor.event_sender {
+                        let _ =
+                            sender.send(VaultEvent::Error(format!("Transit setup error: {}", e)));
+                    }
+                    Err(VaultError::Api(format!("Transit setup error: {}", e)))
+                }
+            }
+        }
+        .boxed_local()
+    }
+}
+
+/// Message for generating a wrapped transit token
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<String, VaultError>")]
+pub struct GenerateWrappedToken {
+    pub policy_name: String,
+    pub wrap_ttl: String,
+    pub token: String,
+}
+
+impl Handler<GenerateWrappedToken> for VaultActor {
+    type Result = ResponseFuture<Result<String, VaultError>>;
+
+    fn handle(&mut self, msg: GenerateWrappedToken, _ctx: &mut Context<Self>) -> Self::Result {
+        let actor = self.clone();
+        let addr = actor.vault_addr.clone();
+
+        // Use the provided token
+        async move {
+            match crate::vault::transit::generate_wrapped_transit_token(
+                &addr,
+                &msg.token,
+                &msg.policy_name,
+                &msg.wrap_ttl,
+            )
+            .await
+            {
+                Ok(wrapped_token) => Ok(wrapped_token),
+                Err(e) => {
+                    if let Some(sender) = &actor.event_sender {
+                        let _ = sender.send(VaultEvent::Error(format!(
+                            "Wrapped token generation error: {}",
+                            e
+                        )));
+                    }
+                    Err(VaultError::Api(format!(
+                        "Wrapped token generation error: {}",
+                        e
+                    )))
+                }
+            }
+        }
+        .boxed_local()
+    }
+}
+
+/// Message for unwrapping a token
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<String, VaultError>")]
+pub struct UnwrapToken {
+    pub wrapped_token: String,
+}
+
+impl Handler<UnwrapToken> for VaultActor {
+    type Result = ResponseFuture<Result<String, VaultError>>;
+
+    fn handle(&mut self, msg: UnwrapToken, _ctx: &mut Context<Self>) -> Self::Result {
+        let actor = self.clone();
+        let addr = actor.vault_addr.clone();
+
+        async move {
+            match crate::vault::autounseal::unwrap_token(&addr, &msg.wrapped_token).await {
+                Ok(unwrapped_token) => {
+                    if let Some(sender) = &actor.event_sender {
+                        let _ = sender.send(VaultEvent::TransitTokenUnwrapped {
+                            root_addr: addr.clone(),
+                            unwrapped_token: unwrapped_token.clone(),
+                        });
+                    }
+                    Ok(unwrapped_token)
+                }
+                Err(e) => {
+                    if let Some(sender) = &actor.event_sender {
+                        let _ =
+                            sender.send(VaultEvent::Error(format!("Token unwrap error: {}", e)));
+                    }
+                    Err(VaultError::Api(format!("Token unwrap error: {}", e)))
+                }
+            }
+        }
+        .boxed_local()
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Start the actor with a broadcast channel
 // -----------------------------------------------------------------------------
