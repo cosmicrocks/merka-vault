@@ -1,19 +1,73 @@
 //! This module provides common utilities for setting up Vault and Caddy containers
 //! for integration testing.
 
+use std::sync::{Mutex, OnceLock};
 use testcontainers::{
     core::{IntoContainerPort, Mount, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
 use tracing::info;
+use tracing_subscriber::{fmt, EnvFilter};
 
-/// Set up logging for tests
+// Global storage for test name access
+static CURRENT_TEST_NAME: OnceLock<String> = OnceLock::new();
+// Track if we've initialized logging
+static INIT_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
+
+/// Set up logging for tests with current test name in each log line
 pub fn init_logging() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_test_writer() // This ensures output goes to both stdout and test output
-        .try_init();
+    // Ensure we only initialize once
+    let init_done = INIT_DONE.get_or_init(|| Mutex::new(false));
+    let mut initialized = init_done.lock().unwrap();
+    if *initialized {
+        // Already initialized
+        return;
+    }
+
+    // Get the current test name from the current thread
+    let thread_name = std::thread::current()
+        .name()
+        .unwrap_or("unknown")
+        .to_string();
+    let test_name = thread_name
+        .split("::")
+        .last()
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Store in global for potential use elsewhere
+    let _ = CURRENT_TEST_NAME.set(test_name.clone());
+
+    // Custom format for the fmt layer that includes the test name
+    let format = fmt::format()
+        .with_level(true)
+        .with_target(false)
+        .with_ansi(true)
+        .with_file(true)
+        .with_line_number(true)
+        .compact();
+
+    // Create and initialize the subscriber with test name prefix
+    let subscriber = fmt::Subscriber::builder()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .with_test_writer()
+        .with_timer(fmt::time::uptime())
+        .event_format(format)
+        .finish();
+
+    // Initialize subscriber
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("Warning: Failed to set global default subscriber: {}", e);
+    } else {
+        *initialized = true;
+    }
+
+    // Log the test name as the first message
+    info!("[TEST: {}] Test started", test_name);
 }
 
 /// Indicates the mode in which to run the Vault container.

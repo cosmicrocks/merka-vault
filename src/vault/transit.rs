@@ -7,6 +7,7 @@
 use crate::vault::{VaultClient, VaultError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing::{info, warn};
 
 /// Response structure for token creation
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,11 +76,11 @@ pub async fn setup_transit_engine(vault_addr: &str, token: &str) -> Result<(), V
         Err(VaultError::HttpStatus(_status, error_text))
             if error_text.contains("path is already in use") =>
         {
-            log::info!("Transit engine already enabled, continuing");
+            info!("Transit engine already enabled, continuing");
             Ok(())
         }
         Err(e) => {
-            log::warn!("Failed to enable transit engine: {}", e);
+            warn!("Failed to enable transit engine: {}", e);
             Err(e)
         }
     }
@@ -120,11 +121,11 @@ pub async fn create_transit_key(
         Err(VaultError::HttpStatus(_status, error_text))
             if error_text.contains("already exists") =>
         {
-            log::info!("Transit key '{}' already exists, continuing", key_name);
+            info!("Transit key '{}' already exists, continuing", key_name);
             Ok(())
         }
         Err(e) => {
-            log::warn!("Failed to create transit key '{}': {}", key_name, e);
+            warn!("Failed to create transit key '{}': {}", key_name, e);
             Err(e)
         }
     }
@@ -185,11 +186,11 @@ pub async fn create_transit_unseal_policy(
     // but we'll log if there were issues
     match response {
         Ok(_) => {
-            log::info!("Created/updated auto-unseal policy: {}", policy_name);
+            info!("Created/updated auto-unseal policy: {}", policy_name);
             Ok(())
         }
         Err(e) => {
-            log::warn!("Failed to create/update policy '{}': {}", policy_name, e);
+            warn!("Failed to create/update policy '{}': {}", policy_name, e);
             Err(e)
         }
     }

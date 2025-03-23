@@ -1,9 +1,9 @@
 //! Helpers for checking Vault status
 
 use crate::vault::VaultError;
-use log::{debug, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VaultStatus {

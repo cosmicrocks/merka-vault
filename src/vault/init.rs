@@ -5,10 +5,10 @@
 
 use crate::vault::VaultError;
 use anyhow::{anyhow, Context, Result as AnyhowResult};
-use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing::{debug, error, info, warn};
 
 /// Options for initializing Vault infrastructure.
 #[derive(Debug, Serialize)]
