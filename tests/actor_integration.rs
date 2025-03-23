@@ -4,8 +4,8 @@ mod common;
 use actix_rt::time::{sleep, timeout};
 use common::{init_logging, setup_vault_container, VaultMode};
 use log::{error, info};
-use merka_vault::actor::{self, InitVault, VaultEvent};
-use merka_vault::vault::{autounseal, transit};
+use merka_vault::actor::{self, AutoUnseal, InitVault, VaultEvent};
+use merka_vault::vault::VaultError;
 use std::time::Duration;
 
 /// Demonstrates passing an **unwrapped** token (rather than root) to the target Vault's
@@ -128,15 +128,22 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     // --- STAGE 3: Set up transit engine + create minimal policy ---
     info!("STAGE 3: Setting up transit engine for auto-unseal");
     let transit_key_name = "auto-unseal-key";
-    match autounseal::setup_transit_autounseal(
-        &unsealer_url,
-        &unsealer_root_token,
-        transit_key_name,
-    )
-    .await
+
+    // Instead of calling autounseal::setup_transit_autounseal directly,
+    // use the actor pattern with SetupTransit message
+    use merka_vault::actor::SetupTransit;
+    match unsealer_addr
+        .send(SetupTransit {
+            key_name: transit_key_name.to_string(),
+            token: unsealer_root_token.clone(), // Pass the root token
+        })
+        .await
     {
-        Ok(_) => info!("✅ Transit engine configured successfully with key: {transit_key_name}"),
-        Err(e) => return Err(format!("Failed to setup transit auto-unseal: {e}").into()),
+        Ok(Ok(_)) => {
+            info!("✅ Transit engine configured successfully with key: {transit_key_name}")
+        }
+        Ok(Err(e)) => return Err(format!("Actor failed to setup transit auto-unseal: {e}").into()),
+        Err(e) => return Err(format!("Failed to send SetupTransit message to actor: {e}").into()),
     }
 
     // --- STAGE 4: Generate wrapped token and unwrap it ---
@@ -144,29 +151,40 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     let policy_name = "autounseal"; // Created by setup_transit_autounseal
     let wrap_ttl = "300s"; // 5 minutes TTL for the wrapped token
 
-    // Generate wrapped token
-    let wrapped_token = match transit::generate_wrapped_transit_token(
-        &unsealer_url,
-        &unsealer_root_token,
-        policy_name,
-        wrap_ttl,
-    )
-    .await
+    // Generate wrapped token using the actor interface
+    use merka_vault::actor::GenerateWrappedToken;
+    let wrapped_token = match unsealer_addr
+        .send(GenerateWrappedToken {
+            policy_name: policy_name.to_string(),
+            wrap_ttl: wrap_ttl.to_string(),
+            token: unsealer_root_token.clone(), // Pass the root token
+        })
+        .await
     {
-        Ok(token) => {
+        Ok(Ok(token)) => {
             info!("✅ Generated wrapped token successfully");
             token
         }
-        Err(e) => return Err(format!("Failed to generate wrapped token: {e}").into()),
+        Ok(Err(e)) => return Err(format!("Actor failed to generate wrapped token: {e}").into()),
+        Err(e) => {
+            return Err(format!("Failed to send GenerateWrappedToken message to actor: {e}").into())
+        }
     };
 
-    // Unwrap the token to get the actual client token
-    let real_client_token = match autounseal::unwrap_token(&unsealer_url, &wrapped_token).await {
-        Ok(token) => {
+    // Unwrap the token using the actor interface
+    use merka_vault::actor::UnwrapToken;
+    let real_client_token = match unsealer_addr
+        .send(UnwrapToken {
+            wrapped_token: wrapped_token.clone(),
+        })
+        .await
+    {
+        Ok(Ok(token)) => {
             info!("✅ Successfully unwrapped token");
             token
         }
-        Err(e) => return Err(format!("Failed to unwrap token: {e}").into()),
+        Ok(Err(e)) => return Err(format!("Actor failed to unwrap token: {e}").into()),
+        Err(e) => return Err(format!("Failed to send UnwrapToken message to actor: {e}").into()),
     };
 
     // Verify token has correct permissions by testing a simple encrypt operation
@@ -218,16 +236,27 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     // --- STAGE 6: Initialize with auto-unseal and verify it works ---
     info!("STAGE 6: Initializing target vault with auto-unseal");
 
+    // Use the actor for the target vault too
+    let (target_addr, mut target_rx) = actor::start_vault_actor_with_channel(&target_url);
+
     // Initialize with timeout since this operation can sometimes take longer
     let init_timeout = Duration::from_secs(30);
+
+    // Send auto-unseal message
     let auto_unseal_result = timeout(init_timeout, async {
-        autounseal::init_with_autounseal(&target_url).await
+        // Use the actor's AutoUnseal message
+        match target_addr.send(AutoUnseal {}).await {
+            Ok(result) => result,
+            Err(e) => Err(VaultError::Api(format!(
+                "Failed to send AutoUnseal message: {e}"
+            ))),
+        }
     })
     .await;
 
-    let init_result = match auto_unseal_result {
+    let auto_unseal_result = match auto_unseal_result {
         Ok(Ok(result)) => {
-            info!("✅ Target auto-unseal initialization succeeded");
+            info!("✅ Target auto-unseal initialization succeeded via actor");
             info!("  - Root token: {}", result.root_token);
             info!(
                 "  - Recovery keys: {} keys received",
@@ -239,11 +268,41 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
         Err(_) => return Err("Auto-unseal initialization timed out".into()),
     };
 
+    // Wait for the AutounsealComplete event to confirm the operation
+    let event_wait_timeout = Duration::from_secs(5);
+    let _ = timeout(event_wait_timeout, async {
+        loop {
+            match target_rx.recv().await {
+                Ok(VaultEvent::AutounsealComplete {
+                    root_token: _,
+                    recovery_keys,
+                }) => {
+                    info!(
+                        "✅ Received AutounsealComplete event with {} recovery keys",
+                        recovery_keys.as_ref().map_or(0, |keys| keys.len())
+                    );
+                    break;
+                }
+                Ok(event) => {
+                    info!(
+                        "Received event while waiting for AutounsealComplete: {:?}",
+                        event
+                    );
+                }
+                Err(e) => {
+                    error!("❌ Failed to receive event: {}", e);
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+
     // Verify token is valid by making a simple API call
     info!("Verifying root token from auto-unsealed vault...");
     let token_verification = reqwest::Client::new()
         .get(format!("{}/v1/sys/health", target_url))
-        .header("X-Vault-Token", &init_result.root_token)
+        .header("X-Vault-Token", &auto_unseal_result.root_token)
         .send()
         .await?;
 
