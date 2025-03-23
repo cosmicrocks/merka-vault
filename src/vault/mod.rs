@@ -8,6 +8,7 @@ pub mod error;
 pub mod init;
 pub mod operations;
 pub mod pki;
+pub mod seal;
 pub mod setup_root;
 pub mod setup_sub;
 pub mod status;
@@ -22,6 +23,7 @@ pub use error::VaultError;
 pub use init::{init_vault, unseal_root_vault, InitResult, UnsealResult};
 pub use operations::VaultOperations;
 pub use pki::PkiResult;
+pub use seal::seal_vault;
 pub use wizard::{run_setup_wizard, WizardConfig, WizardResult};
 
 use serde::{Deserialize, Serialize};

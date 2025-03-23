@@ -47,10 +47,10 @@
 //! # }
 //! ```
 
-use crate::vault::{client::VaultClient, InitResult, VaultError};
-use log::{error, info, warn};
+use crate::vault::{init::InitResult, VaultClient, VaultError};
 use serde_json::json;
 use tokio;
+use tracing::{error, warn};
 
 /// Sets up the transit engine for auto-unseal.
 pub async fn setup_transit_autounseal(
@@ -63,7 +63,7 @@ pub async fn setup_transit_autounseal(
     let mut last_error = None;
 
     for attempt in 1..=max_retries {
-        log::info!(
+        tracing::info!(
             "Setting up transit engine, attempt {}/{}",
             attempt,
             max_retries
@@ -71,14 +71,14 @@ pub async fn setup_transit_autounseal(
 
         match setup_transit_engine_internal(vault_addr, token, key_name).await {
             Ok(_) => {
-                log::info!(
+                tracing::info!(
                     "Successfully set up transit engine after {} attempts",
                     attempt
                 );
                 return Ok(true);
             }
             Err(e) => {
-                log::warn!(
+                tracing::warn!(
                     "Failed to set up transit engine (attempt {}/{}): {}",
                     attempt,
                     max_retries,
@@ -124,19 +124,24 @@ pub async fn configure_vault_for_autounseal(
     unsealer_token: &str,
     key_name: &str,
 ) -> Result<(), VaultError> {
-    info!(
+    tracing::info!(
         "Configuring Vault at {} for auto-unseal using unsealer at {}",
-        target_addr, unsealer_addr
+        target_addr,
+        unsealer_addr
     );
 
     // Check if target vault is already initialized
     match super::status::get_vault_status(target_addr).await {
         Ok(status) => {
             if status.initialized {
-                info!("Target Vault is already initialized, skipping auto-unseal configuration");
+                tracing::info!(
+                    "Target Vault is already initialized, skipping auto-unseal configuration"
+                );
                 return Ok(());
             }
-            info!("Target Vault not initialized, proceeding with auto-unseal configuration");
+            tracing::info!(
+                "Target Vault not initialized, proceeding with auto-unseal configuration"
+            );
         }
         Err(e) => warn!("Could not check target Vault status: {}", e),
     }
@@ -153,7 +158,7 @@ pub async fn configure_vault_for_autounseal(
     // Use the generated token to configure auto-unseal
     configure_vault_for_autounseal_with_token(target_addr, unsealer_addr, &token, key_name).await?;
 
-    info!("Auto-unseal configuration complete for {}", target_addr);
+    tracing::info!("Auto-unseal configuration complete for {}", target_addr);
     Ok(())
 }
 
@@ -178,9 +183,11 @@ pub async fn configure_vault_for_autounseal_with_token(
     token: &str,
     key_name: &str,
 ) -> Result<(), VaultError> {
-    info!(
+    tracing::info!(
         "Validating token for auto-unseal from {} to {} using key {}",
-        target_vault_addr, unsealer_addr, key_name
+        target_vault_addr,
+        unsealer_addr,
+        key_name
     );
 
     // Validate the token has proper permissions
@@ -197,7 +204,7 @@ pub async fn configure_vault_for_autounseal_with_token(
         .await;
 
     match encrypt_result {
-        Ok(_) => info!("✅ Token successfully validated for Transit encrypt operations"),
+        Ok(_) => tracing::info!("✅ Token successfully validated for Transit encrypt operations"),
         Err(e) => {
             error!("❌ Token validation failed: {}", e);
             error!("If you're experiencing a token issue, make sure to:");
@@ -215,36 +222,36 @@ pub async fn configure_vault_for_autounseal_with_token(
 
     // This only validates the token - the actual configuration is handled
     // via the Vault configuration file with a seal stanza
-    info!("✅ Token successfully validated but remember:");
-    info!("  - This function only validates token permissions");
-    info!("  - Your Vault configuration file must include a seal stanza:");
-    info!("    seal \"transit\" {{");
-    info!("      address         = \"{}\"", unsealer_addr);
-    info!("      token           = \"{}\"", token);
-    info!("      key_name        = \"{}\"", key_name);
-    info!("      mount_path      = \"transit/\"");
-    info!("      tls_skip_verify = true");
-    info!("    }}");
+    tracing::info!("✅ Token successfully validated but remember:");
+    tracing::info!("  - This function only validates token permissions");
+    tracing::info!("  - Your Vault configuration file must include a seal stanza:");
+    tracing::info!("    seal \"transit\" {{");
+    tracing::info!("      address         = \"{}\"", unsealer_addr);
+    tracing::info!("      token           = \"{}\"", token);
+    tracing::info!("      key_name        = \"{}\"", key_name);
+    tracing::info!("      mount_path      = \"transit/\"");
+    tracing::info!("      tls_skip_verify = true");
+    tracing::info!("    }}");
 
     Ok(())
 }
 
 /// Initializes a Vault instance with auto-unseal.
 pub async fn init_with_autounseal(vault_addr: &str) -> Result<InitResult, VaultError> {
-    info!("Initializing vault with auto-unseal at {}", vault_addr);
+    tracing::info!("Initializing vault with auto-unseal at {}", vault_addr);
 
     // Check if vault is already initialized
     match super::status::get_vault_status(vault_addr).await {
         Ok(status) => {
             if status.initialized {
-                info!("Vault at {} is already initialized", vault_addr);
+                tracing::info!("Vault at {} is already initialized", vault_addr);
                 return Err(VaultError::AlreadyInitialized);
             }
-            info!("Vault not initialized, proceeding...");
+            tracing::info!("Vault not initialized, proceeding...");
         }
         Err(e) => {
             warn!("Could not check vault initialization status: {}", e);
-            info!("Proceeding with initialization attempt anyway");
+            tracing::info!("Proceeding with initialization attempt anyway");
         }
     }
 
@@ -306,7 +313,7 @@ pub async fn init_with_autounseal(vault_addr: &str) -> Result<InitResult, VaultE
 
     match status_code {
         200 => {
-            info!("Vault initialized successfully with auto-unseal");
+            tracing::info!("Vault initialized successfully with auto-unseal");
 
             // Parse the response body again into the InitResult struct
             let result: InitResult = serde_json::from_str(&body).map_err(|e| {
@@ -437,7 +444,7 @@ pub async fn regenerate_transit_unseal_token(
     )
     .await
     {
-        Ok(_) => info!("✅ Transit unseal policy created or updated"),
+        Ok(_) => tracing::info!("✅ Transit unseal policy created or updated"),
         Err(e) => {
             error!("❌ Failed to create transit unseal policy: {}", e);
             return Err(e);
@@ -453,7 +460,7 @@ pub async fn regenerate_transit_unseal_token(
     .await
     {
         Ok(token) => {
-            info!("✅ Successfully generated new transit unseal token");
+            tracing::info!("✅ Successfully generated new transit unseal token");
             token
         }
         Err(e) => {
@@ -466,7 +473,7 @@ pub async fn regenerate_transit_unseal_token(
     match configure_vault_for_autounseal_with_token("localhost", vault_addr, &new_token, key_name)
         .await
     {
-        Ok(_) => info!("✅ New token successfully validated"),
+        Ok(_) => tracing::info!("✅ New token successfully validated"),
         Err(e) => {
             error!("❌ Validation of new token failed: {}", e);
             error!("The token was generated but may not have proper permissions");
@@ -474,11 +481,11 @@ pub async fn regenerate_transit_unseal_token(
     }
 
     // Print instructions for updating the token
-    info!("To update your auto-unseal configuration:");
-    info!("1. Set the VAULT_TOKEN environment variable for your target Vault:");
-    info!("   export VAULT_TOKEN=\"{}\"", new_token);
-    info!("   or update your docker-compose.yml environment section");
-    info!("2. Restart your target Vault server");
+    tracing::info!("To update your auto-unseal configuration:");
+    tracing::info!("1. Set the VAULT_TOKEN environment variable for your target Vault:");
+    tracing::info!("   export VAULT_TOKEN=\"{}\"", new_token);
+    tracing::info!("   or update your docker-compose.yml environment section");
+    tracing::info!("2. Restart your target Vault server");
 
     Ok(new_token)
 }

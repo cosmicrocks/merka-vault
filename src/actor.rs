@@ -1,11 +1,13 @@
 use actix::prelude::*;
 use async_trait::async_trait;
 use futures_util::FutureExt;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
 use tokio::time;
+use tracing::{debug, error, info, warn};
 
 use crate::interface::VaultInterface;
 use crate::vault::common::VaultStatus;
@@ -31,6 +33,9 @@ pub enum ActorError {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    #[error("HTTP error: {0}")]
+    HttpError(String),
 }
 
 /// Add conversion from VaultError to ActorError
@@ -64,6 +69,8 @@ pub struct VaultHealth {
     pub sealed: bool,
     pub standby: bool,
     pub last_check: SystemTime,
+    pub is_auto_unsealed: bool,
+    pub unsealer_addr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +124,11 @@ pub enum VaultEvent {
         success: bool,
         key_name: String,
     },
+    AutoUnsealDependencyError {
+        sub_addr: String,
+        root_addr: String,
+        error: String,
+    },
 }
 
 #[derive(Clone)]
@@ -125,6 +137,7 @@ pub struct VaultActor {
     pub root_token: Option<String>,
     pub event_sender: Option<broadcast::Sender<VaultEvent>>,
     pub known_vaults: HashMap<String, VaultHealth>,
+    pub unsealer_relationships: HashMap<String, String>,
 }
 
 impl VaultActor {
@@ -137,6 +150,7 @@ impl VaultActor {
             root_token: None,
             event_sender,
             known_vaults: HashMap::new(),
+            unsealer_relationships: HashMap::new(),
         }
     }
 
@@ -150,6 +164,7 @@ impl VaultActor {
             root_token: None,
             event_sender,
             known_vaults: HashMap::new(),
+            unsealer_relationships: HashMap::new(),
         }
     }
 
@@ -168,32 +183,251 @@ impl VaultActor {
             for addr in addrs {
                 self.register_vault(addr).await;
             }
+
+            // After checking the vaults, verify their relationships
+            self.check_auto_unseal_dependencies().await;
+        }
+    }
+
+    // Method to check auto-unseal dependencies
+    async fn check_auto_unseal_dependencies(&mut self) {
+        // Add debug logging for the current state
+        debug!("Checking auto-unseal dependencies. Current state:");
+        debug!(
+            "Known vaults: {:?}",
+            self.known_vaults.keys().collect::<Vec<_>>()
+        );
+        debug!("Unsealer relationships: {:?}", self.unsealer_relationships);
+
+        // For each relationship, check if root vault is sealed or not initialized
+        for (sub_addr, root_addr) in self.unsealer_relationships.clone() {
+            // First refresh the vault statuses
+            if let Ok(root_status) = self.check_status(&root_addr).await {
+                if let Ok(sub_status) = self.check_status(&sub_addr).await {
+                    // Update the known_vaults map with fresh statuses
+                    let mut root_health = self
+                        .known_vaults
+                        .get(&root_addr)
+                        .cloned()
+                        .unwrap_or_else(|| VaultHealth {
+                            addr: root_addr.clone(),
+                            initialized: root_status.initialized,
+                            sealed: root_status.sealed,
+                            standby: root_status.standby,
+                            last_check: SystemTime::now(),
+                            is_auto_unsealed: false,
+                            unsealer_addr: None,
+                        });
+
+                    // Update with fresh status
+                    root_health.initialized = root_status.initialized;
+                    root_health.sealed = root_status.sealed;
+                    root_health.standby = root_status.standby;
+                    root_health.last_check = SystemTime::now();
+
+                    // Same for sub vault
+                    let mut sub_health =
+                        self.known_vaults
+                            .get(&sub_addr)
+                            .cloned()
+                            .unwrap_or_else(|| VaultHealth {
+                                addr: sub_addr.clone(),
+                                initialized: sub_status.initialized,
+                                sealed: sub_status.sealed,
+                                standby: sub_status.standby,
+                                last_check: SystemTime::now(),
+                                is_auto_unsealed: true,
+                                unsealer_addr: Some(root_addr.clone()),
+                            });
+
+                    // Update with fresh status
+                    sub_health.initialized = sub_status.initialized;
+                    sub_health.sealed = sub_status.sealed;
+                    sub_health.standby = sub_status.standby;
+                    sub_health.last_check = SystemTime::now();
+
+                    // Update the maps
+                    self.known_vaults
+                        .insert(root_addr.clone(), root_health.clone());
+                    self.known_vaults
+                        .insert(sub_addr.clone(), sub_health.clone());
+
+                    // Log statuses for debugging
+                    debug!(
+                        "Checking auto-unseal dependency: root={} (sealed={}, init={}), sub={} (sealed={}, init={})",
+                        root_addr, root_health.sealed, root_health.initialized,
+                        sub_addr, sub_health.sealed, sub_health.initialized
+                    );
+
+                    // The critical condition is if the root vault is sealed or not initialized
+                    if root_health.sealed || !root_health.initialized {
+                        let error_msg = if root_health.sealed {
+                            format!(
+                                "Sub vault at {} cannot auto-unseal because root vault at {} is sealed",
+                                sub_addr, root_addr
+                            )
+                        } else if !root_health.initialized {
+                            format!("Sub vault at {} cannot auto-unseal because root vault at {} is not initialized", sub_addr, root_addr)
+                        } else {
+                            format!(
+                                "Sub vault at {} cannot auto-unseal due to issues with root vault at {}",
+                                sub_addr, root_addr
+                            )
+                        };
+
+                        debug!("Auto-unseal dependency error detected: {}", error_msg);
+
+                        // Emit an event for this error condition
+                        if let Some(sender) = &self.event_sender {
+                            debug!(
+                                "Sending AutoUnsealDependencyError event for sub={}, root={}",
+                                sub_addr, root_addr
+                            );
+                            let send_result = sender.send(VaultEvent::AutoUnsealDependencyError {
+                                sub_addr: sub_addr.clone(),
+                                root_addr: root_addr.clone(),
+                                error: error_msg.clone(),
+                            });
+
+                            if let Err(e) = &send_result {
+                                debug!("Failed to send AutoUnsealDependencyError event: {}", e);
+                            } else {
+                                debug!("Successfully sent AutoUnsealDependencyError event");
+                            }
+
+                            // Also send a general error for backwards compatibility
+                            let general_result = sender.send(VaultEvent::Error(error_msg));
+                            if let Err(e) = &general_result {
+                                debug!("Failed to send Error event: {}", e);
+                            }
+                        } else {
+                            warn!(
+                                "No event sender available to send AutoUnsealDependencyError event"
+                            );
+                        }
+                    } else {
+                        debug!(
+                            "No dependency issues detected between root={} and sub={}",
+                            root_addr, sub_addr
+                        );
+                    }
+                } else {
+                    warn!("Failed to check status for sub vault at {}", sub_addr);
+                }
+            } else {
+                warn!("Failed to check status for root vault at {}", root_addr);
+            }
         }
     }
 
     async fn register_vault(&mut self, addr: String) {
-        if !self.known_vaults.contains_key(&addr) {
-            if let Ok(status) = self.check_status(&addr).await {
-                let health = VaultHealth {
-                    addr: addr.clone(),
-                    initialized: status.initialized,
-                    sealed: status.sealed,
-                    standby: status.standby,
-                    last_check: SystemTime::now(),
-                };
+        let should_check_config = !self.known_vaults.contains_key(&addr);
 
-                // Update in-memory cache
-                self.known_vaults.insert(addr.clone(), health.clone());
-
-                // Emit event
-                if let Some(sender) = &self.event_sender {
-                    let _ = sender.send(VaultEvent::VaultHealthUpdated {
-                        addr: addr.clone(),
-                        health,
-                    });
+        if let Ok(status) = self.check_status(&addr).await {
+            // Detect if this is an auto-unsealed vault by checking its configuration
+            let is_auto_unsealed = should_check_config && self.check_is_auto_unsealed(&addr).await;
+            let unsealer_addr = if is_auto_unsealed {
+                let root_addr = self.get_unsealer_address(&addr).await;
+                if let Some(root) = &root_addr {
+                    // Register the relationship for dependency checking
+                    self.unsealer_relationships
+                        .insert(addr.clone(), root.clone());
                 }
+                root_addr
+            } else {
+                None
+            };
+
+            let health = VaultHealth {
+                addr: addr.clone(),
+                initialized: status.initialized,
+                sealed: status.sealed,
+                standby: status.standby,
+                last_check: SystemTime::now(),
+                is_auto_unsealed,
+                unsealer_addr,
+            };
+
+            // Update in-memory cache
+            self.known_vaults.insert(addr.clone(), health.clone());
+
+            // Emit event
+            if let Some(sender) = &self.event_sender {
+                let _ = sender.send(VaultEvent::VaultHealthUpdated {
+                    addr: addr.clone(),
+                    health,
+                });
             }
         }
+    }
+
+    // New helper method to check if a vault is using auto-unseal
+    async fn check_is_auto_unsealed(&self, addr: &str) -> bool {
+        // Try to retrieve the seal configuration to determine if transit seal is being used
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/sys/seal-status", addr);
+
+        match client.get(&url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    // Parse the response to check seal type
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(seal_type) = json.get("type") {
+                            // If seal type is "transit", this is an auto-unsealed vault
+                            return seal_type.as_str().unwrap_or("").contains("transit");
+                        }
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        false
+    }
+
+    // New helper method to get the unsealer address for a sub vault
+    async fn get_unsealer_address(&self, addr: &str) -> Option<String> {
+        // Try to get the configuration which should include the transit seal details
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/sys/config/state/sanitized", addr);
+
+        // Note: This endpoint requires high privileges and may not be accessible
+        // For real implementations, we might need to store this relationship when setting up
+        // In this example, we'll fall back to checking the config if accessible,
+        // or infer from seal type and relationships we observe
+
+        match client.get(&url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(seal) = json.get("seal") {
+                            if let Some(config) = seal.get("config") {
+                                if let Some(address) = config.get("address") {
+                                    return address.as_str().map(|s| s.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        // If we couldn't get the config, check if we've already tracked this relationship elsewhere
+        // In a real implementation, this would be stored when setting up the auto-unseal relationship
+        None
+    }
+
+    // Add a method to manually trigger the dependency check
+    pub async fn check_dependencies_now(&mut self) {
+        // First update status of all known vaults
+        let addrs: Vec<String> = self.known_vaults.keys().cloned().collect();
+        for addr in addrs {
+            self.register_vault(addr).await;
+        }
+
+        // Then run the dependency check
+        self.check_auto_unseal_dependencies().await;
     }
 }
 
@@ -560,11 +794,16 @@ impl Handler<SetupSub> for VaultActor {
             actor.register_vault(msg.root_addr.clone()).await;
             actor.register_vault(msg.sub_addr.clone()).await;
 
+            // Register the auto-unseal relationship for monitoring
+            actor
+                .unsealer_relationships
+                .insert(msg.sub_addr.clone(), msg.root_addr.clone());
+
             let config = SubSetupConfig {
-                sub_addr: msg.sub_addr,
+                sub_addr: msg.sub_addr.clone(),
                 domain: msg.domain,
                 ttl: msg.ttl,
-                root_addr: msg.root_addr,
+                root_addr: msg.root_addr.clone(),
                 root_token: msg.root_token,
             };
 
@@ -606,7 +845,7 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
     fn handle(&mut self, msg: GetUnwrappedTransitToken, _ctx: &mut Context<Self>) -> Self::Result {
         let actor = self.clone();
         async move {
-            log::debug!(
+            debug!(
                 "Getting unwrapped transit token from root vault at {}",
                 msg.root_addr
             );
@@ -660,7 +899,7 @@ impl Handler<GetUnwrappedTransitToken> for VaultActor {
                 }
             };
 
-            log::debug!("Successfully obtained unwrapped transit token");
+            debug!("Successfully obtained unwrapped transit token");
 
             // Emit event if sender is available
             if let Some(sender) = &actor.event_sender {
@@ -874,6 +1113,408 @@ impl Handler<VerifyTokenPermissions> for VaultActor {
     }
 }
 
+// Add new message type for checking dependencies immediately
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), ActorError>")]
+pub struct CheckDependencies;
+
+/// Helper function to check the health status of a vault
+async fn check_vault_health(
+    client: &reqwest::Client,
+    addr: &str,
+) -> Result<VaultHealth, ActorError> {
+    let status_url = format!("{}/v1/sys/health", addr);
+
+    let response = client
+        .get(&status_url)
+        .send()
+        .await
+        .map_err(|e| ActorError::Network(format!("Failed to connect to {}: {}", addr, e)))?;
+
+    if !response.status().is_success() {
+        return if response.status() == StatusCode::INTERNAL_SERVER_ERROR {
+            // Sealed vault returns 500 status, but we still want the response body
+            let health_data: serde_json::Value = response.json().await.map_err(|e| {
+                ActorError::VaultApi(format!("Could not parse vault health response: {}", e))
+            })?;
+
+            // Extract fields from JSON
+            let initialized = health_data
+                .get("initialized")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let sealed = health_data
+                .get("sealed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let standby = health_data
+                .get("standby")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            Ok(VaultHealth {
+                addr: addr.to_string(),
+                initialized,
+                sealed,
+                standby,
+                last_check: std::time::SystemTime::now(),
+                is_auto_unsealed: false, // Will be updated later if needed
+                unsealer_addr: None,
+            })
+        } else {
+            Err(ActorError::VaultApi(format!(
+                "Vault health check failed with status code: {}",
+                response.status()
+            )))
+        };
+    }
+
+    // Parse response
+    let health_data: serde_json::Value = response.json().await.map_err(|e| {
+        ActorError::VaultApi(format!("Could not parse vault health response: {}", e))
+    })?;
+
+    // Extract fields from JSON
+    let initialized = health_data
+        .get("initialized")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let sealed = health_data
+        .get("sealed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let standby = health_data
+        .get("standby")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    Ok(VaultHealth {
+        addr: addr.to_string(),
+        initialized,
+        sealed,
+        standby,
+        last_check: std::time::SystemTime::now(),
+        is_auto_unsealed: false, // Will be updated later if needed
+        unsealer_addr: None,
+    })
+}
+
+/// Function to check auto-unseal dependencies between a sub vault and its root vault
+async fn check_auto_unseal_dependencies(
+    _client: &reqwest::Client,
+    sub_addr: &str,
+    sub_health: &VaultHealth,
+    root_addr: &str,
+    root_health: &VaultHealth,
+    event_tx: &broadcast::Sender<VaultEvent>,
+) -> Result<(), ActorError> {
+    // Log health status for debugging
+    info!(
+        "Checking auto-unseal dependency: sub_vault={} (sealed={}, init={}), root_vault={} (sealed={}, init={})",
+        sub_addr, sub_health.sealed, sub_health.initialized,
+        root_addr, root_health.sealed, root_health.initialized
+    );
+
+    // Check for dependency issues
+    if root_health.sealed || !root_health.initialized {
+        // Root vault has issues that would prevent auto-unsealing
+        let error_msg = if root_health.sealed {
+            format!(
+                "Root vault at {} is sealed, which prevents auto-unsealing of the sub vault at {}",
+                root_addr, sub_addr
+            )
+        } else {
+            format!("Root vault at {} is not initialized, which prevents auto-unsealing of the sub vault at {}",
+                    root_addr, sub_addr)
+        };
+
+        error!("Auto-unseal dependency issue detected: {}", error_msg);
+
+        // Emit event
+        if let Err(e) = event_tx.send(VaultEvent::AutoUnsealDependencyError {
+            sub_addr: sub_addr.to_string(),
+            root_addr: root_addr.to_string(),
+            error: error_msg,
+        }) {
+            error!("Failed to send AutoUnsealDependencyError event: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+impl Handler<CheckDependencies> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, _msg: CheckDependencies, _ctx: &mut Self::Context) -> Self::Result {
+        let unsealer_relationships = self.unsealer_relationships.clone();
+        let known_vaults = self.known_vaults.clone();
+        let event_tx = self.event_sender.clone().unwrap();
+        let client = reqwest::Client::new();
+
+        Box::pin(async move {
+            info!("Checking auto-unseal dependencies...");
+
+            // Log current state for debugging
+            info!("Known vaults: {:?}", known_vaults);
+            info!("Unsealer relationships: {:?}", unsealer_relationships);
+
+            // For each sub vault that has a root vault for auto-unsealing
+            for (sub_addr, root_addr) in &unsealer_relationships {
+                // Aggressively check root vault health first
+                let root_health = match check_vault_health(&client, root_addr).await {
+                    Ok(health) => {
+                        info!(
+                            "Root vault health at {}: sealed={}, initialized={}",
+                            root_addr, health.sealed, health.initialized
+                        );
+                        health
+                    }
+                    Err(e) => {
+                        // Root vault is unreachable - emit error event
+                        error!("Root vault {} is unreachable: {}", root_addr, e);
+                        let error_msg = format!("Root vault is unreachable: {}", e);
+
+                        if let Err(e) = event_tx.send(VaultEvent::AutoUnsealDependencyError {
+                            sub_addr: sub_addr.clone(),
+                            root_addr: root_addr.clone(),
+                            error: error_msg,
+                        }) {
+                            error!("Failed to send event: {}", e);
+                        }
+
+                        continue;
+                    }
+                };
+
+                // Check if root vault is in a state that prevents auto-unseal
+                if root_health.sealed || !root_health.initialized {
+                    // Root vault is sealed or not initialized - emit error event
+                    let error_msg = if root_health.sealed {
+                        format!("Root vault {} is sealed", root_addr)
+                    } else {
+                        format!("Root vault {} is not initialized", root_addr)
+                    };
+
+                    error!("Auto-unseal dependency issue detected: {}", error_msg);
+
+                    if let Err(e) = event_tx.send(VaultEvent::AutoUnsealDependencyError {
+                        sub_addr: sub_addr.clone(),
+                        root_addr: root_addr.clone(),
+                        error: error_msg,
+                    }) {
+                        error!("Failed to send event: {}", e);
+                    }
+
+                    continue;
+                }
+
+                // Now check sub vault health
+                let sub_health = match check_vault_health(&client, sub_addr).await {
+                    Ok(health) => {
+                        info!(
+                            "Sub vault health at {}: sealed={}, initialized={}",
+                            sub_addr, health.sealed, health.initialized
+                        );
+                        health
+                    }
+                    Err(e) => {
+                        // Sub vault is unreachable - log but don't emit event yet
+                        warn!("Sub vault {} is unreachable: {}", sub_addr, e);
+                        continue;
+                    }
+                };
+
+                // We've checked both vaults - now call the dependency check function
+                if let Err(e) = check_auto_unseal_dependencies(
+                    &client,
+                    sub_addr,
+                    &sub_health,
+                    root_addr,
+                    &root_health,
+                    &event_tx,
+                )
+                .await
+                {
+                    error!("Failed to check auto-unseal dependencies: {}", e);
+                }
+            }
+
+            Ok(())
+        })
+    }
+}
+
+// Add new message type for getting the actor's current vault address
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<String, ActorError>")]
+pub struct GetCurrentAddress;
+
+impl Handler<GetCurrentAddress> for VaultActor {
+    type Result = ResponseFuture<Result<String, ActorError>>;
+
+    fn handle(&mut self, _: GetCurrentAddress, _ctx: &mut Context<Self>) -> Self::Result {
+        let addr = self.vault_addr.clone();
+        async move { Ok(addr) }.boxed_local()
+    }
+}
+
+// Add new message type for setting the actor's current vault address
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), ActorError>")]
+pub struct SetCurrentAddress(pub String);
+
+impl Handler<SetCurrentAddress> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: SetCurrentAddress, _ctx: &mut Context<Self>) -> Self::Result {
+        self.vault_addr = msg.0;
+        async move { Ok(()) }.boxed_local()
+    }
+}
+
+// Add new message type for adding an unsealer relationship
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), ActorError>")]
+pub struct AddUnsealerRelationship {
+    pub sub_addr: String,
+    pub root_addr: String,
+}
+
+impl Handler<AddUnsealerRelationship> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: AddUnsealerRelationship, _ctx: &mut Context<Self>) -> Self::Result {
+        // Update the relationship in the actor instance
+        self.unsealer_relationships
+            .insert(msg.sub_addr.clone(), msg.root_addr.clone());
+
+        // Log for debugging
+        info!(
+            "Added unsealer relationship: sub={}, root={}",
+            msg.sub_addr, msg.root_addr
+        );
+
+        // Clone values for async
+        let sub_addr = msg.sub_addr;
+        let root_addr = msg.root_addr;
+        let mut actor = self.clone();
+
+        async move {
+            // Register both vaults
+            actor.register_vault(sub_addr.clone()).await;
+            actor.register_vault(root_addr.clone()).await;
+
+            // Check if the root vault has any issues
+            if let Ok(root_status) = actor.check_status(&root_addr).await {
+                if root_status.sealed || !root_status.initialized {
+                    info!("Detected issue with root vault: sealed={}, init={}",
+                              root_status.sealed, root_status.initialized);
+
+                    // Construct error message
+                    let error_msg = if root_status.sealed {
+                        format!("Sub vault at {} cannot auto-unseal because root vault at {} is sealed",
+                               sub_addr, root_addr)
+                    } else {
+                        format!("Sub vault at {} cannot auto-unseal because root vault at {} is not initialized",
+                               sub_addr, root_addr)
+                    };
+
+                    // Emit error event
+                    if let Some(sender) = &actor.event_sender {
+                        let _ = sender.send(VaultEvent::AutoUnsealDependencyError {
+                            sub_addr: sub_addr.clone(),
+                            root_addr: root_addr.clone(),
+                            error: error_msg.clone(),
+                        });
+
+                        // Also send general error
+                        let _ = sender.send(VaultEvent::Error(error_msg));
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        .boxed_local()
+    }
+}
+
+// Add new message type for explicitly registering a vault
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), ActorError>")]
+pub struct RegisterVault(pub String);
+
+impl Handler<RegisterVault> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: RegisterVault, _ctx: &mut Context<Self>) -> Self::Result {
+        // Clone for async to avoid borrowing issues
+        let addr = msg.0;
+        let mut actor = self.clone();
+
+        async move {
+            // Register the vault
+            actor.register_vault(addr.clone()).await;
+            info!("Registered vault: {}", addr);
+            Ok(())
+        }
+        .boxed_local()
+    }
+}
+
+/// Message to seal a vault intentionally
+#[derive(Message)]
+#[rtype(result = "Result<(), ActorError>")]
+pub struct SealVault {
+    pub token: String,
+}
+
+impl Handler<SealVault> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: SealVault, _ctx: &mut Self::Context) -> Self::Result {
+        let address = self.vault_addr.clone();
+        let token = msg.token.clone();
+        let event_sender = self.event_sender.clone();
+
+        Box::pin(async move {
+            info!("Sealing vault at {}", address);
+
+            match crate::vault::seal_vault(&address, &token).await {
+                Ok(_) => {
+                    info!("Successfully sealed vault at {}", address);
+
+                    // Send an event if applicable
+                    if let Some(sender) = &event_sender {
+                        let _ = sender.send(VaultEvent::Error(format!(
+                            "Vault at {} was intentionally sealed",
+                            address
+                        )));
+                    }
+
+                    Ok(())
+                }
+                Err(err) => {
+                    error!("Failed to seal vault: {}", err);
+
+                    if let Some(sender) = &event_sender {
+                        let _ = sender.send(VaultEvent::Error(format!(
+                            "Failed to seal vault at {}: {}",
+                            address, err
+                        )));
+                    }
+
+                    Err(ActorError::VaultApi(format!(
+                        "Failed to seal vault: {}",
+                        err
+                    )))
+                }
+            }
+        })
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Start the actor with a broadcast channel
 // -----------------------------------------------------------------------------
@@ -1002,7 +1643,7 @@ impl VaultInterface for VaultActor {
         root_token: &str,
         key_name: &str,
     ) -> Result<String, VaultError> {
-        log::debug!(
+        debug!(
             "Getting unwrapped transit token from root vault at {}",
             root_addr
         );
@@ -1044,7 +1685,7 @@ impl VaultInterface for VaultActor {
                 Err(e) => return Err(VaultError::Api(format!("Failed to unwrap token: {}", e))),
             };
 
-        log::debug!("Successfully obtained unwrapped transit token");
+        debug!("Successfully obtained unwrapped transit token");
 
         // Emit event if sender is available
         if let Some(sender) = &self.event_sender {

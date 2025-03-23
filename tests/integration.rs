@@ -5,10 +5,10 @@
 
 mod common;
 use common::{init_logging, setup_vault_container};
-use log::{error, info};
 use merka_vault::vault::transit; // Add transit module import
 use std::time::Duration;
 use tokio::time::sleep;
+use tracing::{error, info};
 
 /// Tests the basic PKI setup functionality using a dev Vault instance.
 /// This verifies that we can successfully:
