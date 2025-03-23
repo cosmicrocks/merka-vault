@@ -1,5 +1,10 @@
 # Merka-Vault
 
+[![Crates.io](https://img.shields.io/crates/v/merka-vault.svg)](https://crates.io/crates/merka-vault)
+[![Docs.rs](https://docs.rs/merka-vault/badge.svg)](https://docs.rs/merka-vault)
+[![Build](https://img.shields.io/github/actions/workflow/status/cosmicrocks/merka-vault/ci.yml?branch=main)](https://github.com/cosmicrocks/merka-vault/actions)
+[![License: MIT or Apache 2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
+
 A Rust-based tool for managing and automating HashiCorp Vault operations.
 
 ## Features
