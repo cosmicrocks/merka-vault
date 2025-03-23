@@ -4,6 +4,7 @@ pub mod auth;
 pub mod autounseal;
 pub mod client;
 pub mod common;
+pub mod error;
 pub mod init;
 pub mod operations;
 pub mod pki;
@@ -11,67 +12,19 @@ pub mod setup_root;
 pub mod setup_sub;
 pub mod status;
 pub mod transit;
+pub mod wizard;
 
 // Re-export key types and traits for convenience
+pub use auth::*;
 pub use client::VaultClient;
-pub use init::{InitResult, UnsealResult};
+pub use common::VaultStatus;
+pub use error::VaultError;
+pub use init::{init_vault, unseal_root_vault, InitResult, UnsealResult};
 pub use operations::VaultOperations;
 pub use pki::PkiResult;
+pub use wizard::{run_setup_wizard, WizardConfig, WizardResult};
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-/// Error types for Vault operations.
-#[derive(Error, Debug)]
-pub enum VaultError {
-    /// API error returned by Vault.
-    #[error("API error: {0}")]
-    Api(String),
-
-    /// API error returned by Vault with specific message.
-    #[error("API error: {0}")]
-    ApiError(String),
-
-    /// Network error during communication with Vault.
-    #[error("Network error: {0}")]
-    Network(String),
-
-    /// Connection error when connecting to Vault.
-    #[error("Connection error: {0}")]
-    Connection(String),
-
-    /// Error when parsing response from Vault.
-    #[error("Parse error: {0}")]
-    ParseError(String),
-
-    /// Error parsing response data.
-    #[error("Parsing error: {0}")]
-    Parsing(String),
-
-    /// Error constructing request to Vault.
-    #[error("Request error: {0}")]
-    RequestError(String),
-
-    /// HTTP status error response.
-    #[error("HTTP status {0}: {1}")]
-    HttpStatus(u16, String),
-
-    /// Vault is sealed error.
-    #[error("Vault is sealed: {0}")]
-    Sealed(String),
-
-    /// Vault is already initialized.
-    #[error("Vault is already initialized")]
-    AlreadyInitialized,
-
-    /// Error from the reqwest crate.
-    #[error("Reqwest error: {0}")]
-    Reqwest(#[from] reqwest::Error),
-
-    /// Error serializing or deserializing JSON.
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-}
 
 /// Credentials for AppRole authentication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,4 +41,70 @@ pub struct AutoUnsealResult {
     pub root_token: String,
     pub recovery_keys: Option<Vec<String>>,
     pub success: bool,
+}
+
+/// Vault configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VaultConfig {
+    /// Vault API URL, e.g., "http://127.0.0.1:8200".
+    pub url: String,
+    /// Optional API token. Some operations (e.g., status) don't require a token,
+    /// but most do.
+    pub token: Option<String>,
+    /// Optional client certificate for mTLS connections
+    pub client_cert_path: Option<String>,
+    /// Optional client key for mTLS connections
+    pub client_key_path: Option<String>,
+    /// Optional CA certificate for verifying the server
+    pub ca_cert_path: Option<String>,
+    /// Optional namespace for supporting namespaced Vault instances (enterprise)
+    pub namespace: Option<String>,
+}
+
+impl VaultConfig {
+    /// Create a new Vault config
+    pub fn new(url: &str) -> Self {
+        Self {
+            url: url.to_string(),
+            token: None,
+            client_cert_path: None,
+            client_key_path: None,
+            ca_cert_path: None,
+            namespace: None,
+        }
+    }
+
+    /// Set token
+    pub fn with_token(mut self, token: &str) -> Self {
+        self.token = Some(token.to_string());
+        self
+    }
+
+    /// Set mTLS cert paths
+    pub fn with_mtls(mut self, client_cert: &str, client_key: &str, ca_cert: Option<&str>) -> Self {
+        self.client_cert_path = Some(client_cert.to_string());
+        self.client_key_path = Some(client_key.to_string());
+        self.ca_cert_path = ca_cert.map(|s| s.to_string());
+        self
+    }
+
+    /// Set namespace
+    pub fn with_namespace(mut self, namespace: &str) -> Self {
+        self.namespace = Some(namespace.to_string());
+        self
+    }
+}
+
+// Default configuration
+impl Default for VaultConfig {
+    fn default() -> Self {
+        Self {
+            url: "http://127.0.0.1:8200".to_string(),
+            token: None,
+            client_cert_path: None,
+            client_key_path: None,
+            ca_cert_path: None,
+            namespace: None,
+        }
+    }
 }

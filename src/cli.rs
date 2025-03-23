@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use std::fs;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::interface::VaultInterface;
 use crate::vault::common::VaultStatus;
@@ -11,6 +11,7 @@ use crate::vault::{UnsealResult, VaultError};
 // --- Import the new two-step setup logic ---
 use crate::vault::setup_root::{setup_root_vault, RootSetupConfig, RootSetupResult};
 use crate::vault::setup_sub::{setup_sub_vault, SubSetupConfig, SubSetupResult};
+use crate::vault::wizard::run_setup_wizard;
 
 #[derive(Parser)]
 #[command(
@@ -49,6 +50,9 @@ pub enum Commands {
         #[arg(long)]
         vault_addr: Option<String>,
     },
+
+    /// Interactive setup wizard for vault provisioning
+    Setup,
 
     /// (Step 1) Set up the root Vault for auto‐unseal, generating an unwrapped token
     SetupRoot {
@@ -248,79 +252,62 @@ impl VaultInterface for VaultCli {
 }
 
 // -------------------------------------------------------------------
-// The CLI entry point (run_cli)
+// The main CLI runner that processes commands
 // -------------------------------------------------------------------
 pub async fn run_cli() -> Result<()> {
+    // Parse CLI args
     let cli = Cli::parse();
-    let vault_cli = VaultCli {};
+    let vault_cli = VaultCli;
 
     match cli.command {
-        Commands::List => {
-            info!("Listing known vaults and their status");
-            info!("To check a vault's status, use the 'status' command with a specific address.");
-            return Ok(());
-        }
-
-        // 1) Unseal
-        Commands::Unseal { keys, keys_file } => {
-            info!("Unsealing Vault at {}", cli.vault_addr);
-            let mut unseal_keys = Vec::new();
-
-            // if keys_file is provided, read from that
-            if let Some(file) = keys_file {
-                let contents = fs::read_to_string(file)?;
-                for line in contents.lines() {
-                    let line = line.trim();
-                    if !line.is_empty() {
-                        unseal_keys.push(line.to_string());
-                    }
-                }
-            }
-            // Add any keys from command line
-            unseal_keys.extend(keys);
-
-            if unseal_keys.is_empty() {
-                return Err(anyhow::anyhow!("No unseal keys provided"));
-            }
-
-            match vault_cli.unseal(&cli.vault_addr, unseal_keys).await {
-                Ok(result) => {
-                    info!("Unseal result: sealed = {}", result.sealed);
-                    info!("Progress: {}/{}", result.progress, result.threshold);
-                }
-                Err(err) => {
-                    return Err(anyhow::anyhow!("Failed to unseal vault: {}", err));
-                }
-            }
-        }
-
-        // 2) Status
         Commands::Status { vault_addr } => {
-            let addr = vault_addr.unwrap_or_else(|| cli.vault_addr.clone());
-            info!("Checking status of Vault at {}", addr);
+            // Use the vault_addr override if supplied, otherwise use the global cli.vault_addr.
+            let addr = vault_addr.as_deref().unwrap_or(&cli.vault_addr);
 
-            match vault_cli.check_status(&addr).await {
-                Ok(status) => {
-                    info!(
-                        "Vault Status: Initialized={}, Sealed={}, Standby={}",
-                        status.initialized, status.sealed, status.standby
-                    );
-                    if !status.initialized {
-                        info!("Vault is not initialized yet.");
-                    } else if status.sealed {
-                        info!("Vault is sealed. You need to unseal it.");
-                    } else {
-                        info!("Vault is unsealed and ready.");
-                    }
-                }
-                Err(e) => {
-                    error!("Error checking Vault status: {}", e);
-                    return Err(anyhow::anyhow!("Failed to check Vault status: {}", e));
-                }
+            info!("Checking Vault status at {}", addr);
+            let status = vault_cli.check_status(addr).await?;
+
+            println!("Vault Status for {}:", addr);
+            println!("  Initialized: {}", status.initialized);
+            println!("  Sealed: {}", status.sealed);
+            if status.sealed {
+                println!("  Seal Progress: {}/{}", status.progress, status.t);
+            }
+            println!("  Version: {}", status.version);
+        }
+
+        Commands::Unseal { keys, keys_file } => {
+            // Process keys from command line args and/or file
+            let mut all_keys = keys;
+            if let Some(file) = keys_file {
+                let file_content = fs::read_to_string(file)?;
+                let file_keys: Vec<String> = file_content
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| l.trim().to_string())
+                    .collect();
+                all_keys.extend(file_keys);
+            }
+
+            info!("Unsealing Vault with {} keys", all_keys.len());
+            let unseal_result = vault_cli.unseal(&cli.vault_addr, all_keys).await?;
+
+            println!("Unseal operation result:");
+            println!("  Sealed: {}", unseal_result.sealed);
+            println!(
+                "  Progress: {}/{}",
+                unseal_result.progress, unseal_result.threshold
+            );
+            if !unseal_result.sealed {
+                println!("  Success: Vault is now unsealed!");
+            } else {
+                println!(
+                    "  Additional keys needed: {} more",
+                    unseal_result.threshold - unseal_result.progress
+                );
             }
         }
 
-        // 3) SetupRoot (step 1)
         Commands::SetupRoot {
             root_addr,
             secret_shares,
@@ -329,8 +316,6 @@ pub async fn run_cli() -> Result<()> {
             mode,
             output_file,
         } => {
-            info!("Running setup-root for Vault at {}", root_addr);
-
             let config = RootSetupConfig {
                 root_addr,
                 secret_shares,
@@ -340,69 +325,54 @@ pub async fn run_cli() -> Result<()> {
                 output_file,
             };
 
-            match setup_root_vault(config).await {
-                Ok(RootSetupResult {
-                    root_init,
-                    unwrapped_token,
-                }) => {
-                    info!(
-                        "Root Vault setup is complete. Root token = {}",
-                        root_init.root_token
-                    );
-                    if !root_init.keys.is_empty() {
-                        info!("Root Vault unseal keys: {:?}", root_init.keys);
-                    }
-                    info!("Unwrapped token for sub Vault = {}", unwrapped_token);
-
-                    info!("Now update your sub Vault environment with that token, ");
-                    info!("then run 'merka-vault setup-sub --sub-addr=...' to continue.");
-                }
-                Err(e) => {
-                    error!("Failed to set up root vault: {}", e);
-                    return Err(e);
-                }
-            }
+            let result = setup_root_vault(config).await?;
+            println!(
+                "Root setup complete! Root token: {}",
+                result.root_init.root_token
+            );
+            println!("Unwrapped token for sub-vault: {}", result.unwrapped_token);
         }
 
-        // 4) SetupSub (step 2)
         Commands::SetupSub {
+            root_addr,
+            root_token,
             sub_addr,
             domain,
             ttl,
-            root_addr,
-            root_token,
         } => {
-            info!("Running setup-sub for sub Vault at {}", sub_addr);
-
+            let root_addr = root_addr.unwrap_or_else(|| cli.vault_addr.clone());
             let config = SubSetupConfig {
                 sub_addr,
                 domain,
                 ttl,
-                root_addr: root_addr.unwrap_or(cli.vault_addr.clone()),
-                root_token: root_token.clone(),
+                root_addr,
+                root_token,
             };
 
-            match setup_sub_vault(config).await {
-                Ok(SubSetupResult {
-                    sub_init,
-                    pki_roles,
-                }) => {
-                    info!(
-                        "Sub Vault is auto-unsealed: root token = {}",
-                        sub_init.root_token
-                    );
+            let result = setup_sub_vault(config).await?;
+            println!(
+                "Sub vault setup complete! Root token: {}",
+                result.sub_init.root_token
+            );
+            println!("PKI role: {}", result.pki_roles.1);
+        }
 
-                    if let Some(rk) = sub_init.recovery_keys.clone() {
-                        info!("Recovery keys: {:?}", rk);
+        Commands::Setup => {
+            println!("Starting the interactive setup wizard...");
+            match run_setup_wizard().await {
+                Ok(result) => {
+                    println!("Setup wizard completed successfully!");
+                    if let Some(root_result) = result.root_result {
+                        println!("Root Vault setup: SUCCESS");
+                        println!("Root token: {}", root_result.root_init.root_token);
                     }
-                    info!(
-                        "Intermediate PKI roles: (root_role=?, int_role={})",
-                        pki_roles.1
-                    );
-                    info!("Setup-sub complete!");
+                    if let Some(sub_result) = result.sub_result {
+                        println!("Sub Vault setup: SUCCESS");
+                        println!("Sub token: {}", sub_result.sub_init.root_token);
+                    }
                 }
                 Err(e) => {
-                    error!("Failed to set up sub vault: {}", e);
+                    println!("Setup wizard encountered an error: {}", e);
                     return Err(e);
                 }
             }
@@ -413,26 +383,37 @@ pub async fn run_cli() -> Result<()> {
             root_token,
             key_name,
         } => {
-            info!(
-                "Getting unwrapped transit token from root vault at {}",
-                root_addr
-            );
-
-            match vault_cli
+            let token = vault_cli
                 .get_unwrapped_transit_token(&root_addr, &root_token, &key_name)
-                .await
-            {
-                Ok(unwrapped_token) => {
-                    info!("Successfully obtained unwrapped transit token:");
-                    println!("{}", unwrapped_token);
-                    info!("Use this token when configuring your sub-vault's VAULT_TOKEN environment variable.");
+                .await?;
+            println!("Unwrapped transit token: {}", token);
+        }
+
+        Commands::List => {
+            // The list command could check for vaults in known locations or
+            // vaults configured in a config file.
+            println!("Known vaults:");
+            println!("  Root vault: {}", cli.vault_addr);
+            match vault_cli.check_status(&cli.vault_addr).await {
+                Ok(status) => {
+                    println!("    Initialized: {}", status.initialized);
+                    println!("    Sealed: {}", status.sealed);
                 }
                 Err(e) => {
-                    error!("Failed to get unwrapped transit token: {}", e);
-                    return Err(anyhow::anyhow!(
-                        "Failed to get unwrapped transit token: {}",
-                        e
-                    ));
+                    println!("    Status: Error - {}", e);
+                }
+            }
+
+            // Try the sub vault at standard port
+            let sub_addr = cli.vault_addr.replace(":8200", ":8202");
+            match vault_cli.check_status(&sub_addr).await {
+                Ok(status) => {
+                    println!("  Sub vault: {}", sub_addr);
+                    println!("    Initialized: {}", status.initialized);
+                    println!("    Sealed: {}", status.sealed);
+                }
+                Err(_) => {
+                    println!("  Sub vault: Not detected at {}", sub_addr);
                 }
             }
         }
