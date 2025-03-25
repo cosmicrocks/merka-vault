@@ -1,10 +1,9 @@
+use log::{error, info, warn};
+use merka_vault::database::{DatabaseManager, VaultCredentials};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fs::File;
-use std::io::{self, Read};
-use tracing::{error, info, warn};
-use tracing_subscriber::{self, EnvFilter};
+use std::env;
+use std::io;
 
 // This example replicates the workflow of the wizard.rs, but through web server API calls.
 // It demonstrates setting up a root vault and a sub vault with auto-unseal.
@@ -19,30 +18,12 @@ use tracing_subscriber::{self, EnvFilter};
 // And docker-compose to be available for the vault services:
 //   docker-compose up -d
 
-// Update the structure to hold credentials for both vaults
-#[derive(Serialize, Deserialize, Default)]
-struct VaultCredentials {
-    // Root vault credentials
-    root_unseal_keys: Vec<String>,
-    root_token: String,
-    // Sub vault credentials
-    sub_token: String,
-    // Transit token for auto-unseal
-    transit_token: String,
-}
+// Local struct definition removed - now using VaultCredentials from database module
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
-    // Check for command line arguments
-    let args: Vec<String> = std::env::args().collect();
-    let restart_sub_vault = args.contains(&"--restart-sub-vault".to_string());
+    // Initialize logging with env_logger, setting a default log level if RUST_LOG is not set
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     info!("Starting Merka Vault test client");
     info!("This example assumes you have started the web server and docker-compose vaults");
@@ -52,15 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("it was initialized, or by restarting the vault in dev mode.");
     info!("---------------------------------------------------------------------------------");
 
-    // Create HTTP client for API calls
-    let client = Client::new();
+    // Create HTTP client
+    let client = Client::builder().build()?;
+
+    // Check command line args
+    let restart_sub_vault = env::args().any(|arg| arg == "--restart-sub-vault");
 
     // Run the setup flow
-    if let Err(e) = run_setup_flow(&client, restart_sub_vault).await {
-        error!("Setup flow failed: {}", e);
-    } else {
-        info!("Setup flow completed successfully");
-    }
+    run_setup_flow(&client, restart_sub_vault).await?;
 
     info!("Test client finished. Exiting...");
 
@@ -74,86 +54,80 @@ fn save_vault_credentials(credentials: &VaultCredentials) -> Result<(), io::Erro
         warn!("Root token is empty, but saving credentials anyway");
     }
 
-    // Create the file with detailed error handling
-    info!("Attempting to save credentials to vault_credentials.json");
-    let file = match File::create("vault_credentials.json") {
-        Ok(file) => file,
+    // Create a database manager
+    let db_path = "merka_vault.db";
+    let db_manager = match DatabaseManager::new(db_path) {
+        Ok(manager) => manager,
         Err(e) => {
-            error!("Failed to create vault_credentials.json: {}", e);
-            if e.kind() == io::ErrorKind::PermissionDenied {
-                error!("Permission denied - check your file permissions");
-            }
-            return Err(e);
+            error!("Failed to initialize database: {}", e);
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Database error: {}", e),
+            ));
         }
     };
 
-    // Write to the file with detailed error handling
-    match serde_json::to_writer_pretty(file, credentials) {
-        Ok(_) => {}
+    // Save credentials to database
+    match db_manager.save_vault_credentials(credentials) {
+        Ok(_) => {
+            // Log the saved data to help with debugging
+            info!("✅ Vault credentials successfully saved to database");
+            info!("  Root token length: {}", credentials.root_token.len());
+            info!("  Root unseal keys: {}", credentials.root_unseal_keys.len());
+            info!("  Sub token length: {}", credentials.sub_token.len());
+            info!(
+                "  Transit token length: {}",
+                credentials.transit_token.len()
+            );
+            Ok(())
+        }
         Err(e) => {
-            error!("Failed to write to vault_credentials.json: {}", e);
-            return Err(io::Error::new(io::ErrorKind::Other, e));
+            error!("Failed to save credentials to database: {}", e);
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Database error: {}", e),
+            ))
         }
     }
-
-    // Log the saved data to help with debugging
-    info!("✅ Vault credentials successfully saved to vault_credentials.json");
-    info!("  Root token length: {}", credentials.root_token.len());
-    info!("  Root unseal keys: {}", credentials.root_unseal_keys.len());
-    info!("  Sub token length: {}", credentials.sub_token.len());
-    info!(
-        "  Transit token length: {}",
-        credentials.transit_token.len()
-    );
-
-    // Print the current working directory for debugging
-    if let Ok(current_dir) = std::env::current_dir() {
-        info!("Current directory: {}", current_dir.display());
-    }
-
-    Ok(())
 }
 
 // Function to load vault credentials
 fn load_vault_credentials() -> Result<VaultCredentials, io::Error> {
-    let mut file = match File::open("vault_credentials.json") {
-        Ok(f) => f,
+    // Create a database manager
+    let db_path = "merka_vault.db";
+    let db_manager = match DatabaseManager::new(db_path) {
+        Ok(manager) => manager,
         Err(e) => {
-            warn!("Failed to open vault_credentials.json: {}", e);
-            return Err(e);
+            error!("Failed to initialize database: {}", e);
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Database error: {}", e),
+            ));
         }
     };
 
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-
-    // Check if file is empty or too small
-    if contents.trim().is_empty() || contents.len() < 10 {
-        warn!("vault_credentials.json exists but is empty or too small");
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Credentials file is empty or invalid",
-        ));
+    // Load credentials from database
+    match db_manager.load_vault_credentials() {
+        Ok(credentials) => {
+            // Log the loaded data
+            info!("Loaded vault credentials from database");
+            info!("  Root token length: {}", credentials.root_token.len());
+            info!("  Root unseal keys: {}", credentials.root_unseal_keys.len());
+            info!("  Sub token length: {}", credentials.sub_token.len());
+            info!(
+                "  Transit token length: {}",
+                credentials.transit_token.len()
+            );
+            Ok(credentials)
+        }
+        Err(e) => {
+            warn!("Failed to load credentials from database: {}", e);
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Database error: {}", e),
+            ))
+        }
     }
-
-    let credentials: VaultCredentials = match serde_json::from_str(&contents) {
-        Ok(creds) => creds,
-        Err(e) => {
-            error!("Failed to parse vault_credentials.json: {}", e);
-            return Err(io::Error::new(io::ErrorKind::InvalidData, e));
-        }
-    };
-
-    info!("Loaded vault credentials from vault_credentials.json");
-    info!("  Root token length: {}", credentials.root_token.len());
-    info!("  Root unseal keys: {}", credentials.root_unseal_keys.len());
-    info!("  Sub token length: {}", credentials.sub_token.len());
-    info!(
-        "  Transit token length: {}",
-        credentials.transit_token.len()
-    );
-
-    Ok(credentials)
 }
 
 // Implement the setup flow function that replicates the wizard functionality via API calls
@@ -521,7 +495,7 @@ async fn run_setup_flow(
     }
 
     info!("Setup flow completed");
-    info!("Saved credentials for both root and sub vaults in vault_credentials.json");
+    info!("Saved credentials for both root and sub vaults in database");
 
     Ok(())
 }

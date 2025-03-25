@@ -8,6 +8,7 @@
 /// - PKI infrastructure configuration
 /// - WebSocket events for real-time operation status
 /// - RESTful API for all vault operations
+/// - SQLite database for persistent storage of vault credentials and relationships
 ///
 /// ## Operation Sequence
 ///
@@ -31,6 +32,13 @@
 /// - `POST /api/setup_sub_vault` - Set up a sub vault with auto-unseal and PKI
 /// - `POST /api/auto_unseal` - Configure auto-unseal only
 /// - `GET /api/status` - Check vault status
+/// - `POST /api/sync_token` - Sync an existing initialized vault's token with the database
+///
+/// ## Database Migration
+///
+/// When migrating from file-based storage to SQLite, for existing initialized vaults,
+/// use the `/api/sync_token` endpoint to provide the root token so it can be stored
+/// in the database.
 use actix::*;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
@@ -41,8 +49,9 @@ use log::{debug, error, info, warn};
 use merka_vault::actor::{
     AddUnsealerRelationship, AutoUnseal, CheckDependencies, CheckStatus, GetCurrentAddress,
     GetUnwrappedTransitToken, InitVault, SetCurrentAddress, SetRootToken, SetupPki, SetupTransit,
-    UnsealVault, VaultActor, VaultEvent,
+    UnsealVault, VaultActor, VaultEvent, VerifyTokenPermissions,
 };
+use merka_vault::database::DatabaseManager;
 use serde::{Deserialize, Serialize};
 use socketioxide::{extract::SocketRef, socket::DisconnectReason, SocketIo};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -136,6 +145,12 @@ struct GetTransitTokenRequest {
     key_name: String,
 }
 
+#[derive(Deserialize)]
+struct SyncTokenRequest {
+    addr: String,
+    token: String,
+}
+
 #[derive(Serialize)]
 struct ApiResponse<T> {
     success: bool,
@@ -148,18 +163,7 @@ struct AppState {
     actor: Addr<VaultActor>,
     event_tx: broadcast::Sender<VaultEvent>,
     connections: Arc<Mutex<HashMap<String, SocketRef>>>,
-}
-
-// Define the VaultCredentials struct
-#[derive(Serialize, Deserialize, Default)]
-struct VaultCredentials {
-    // Root vault credentials
-    root_unseal_keys: Vec<String>,
-    root_token: String,
-    // Sub vault credentials
-    sub_token: String,
-    // Transit token for auto-unseal
-    transit_token: String,
+    db_manager: Arc<DatabaseManager>,
 }
 
 // Unseal vault
@@ -456,7 +460,7 @@ async fn setup_root_vault(
             Ok(Ok(init_keys)) => {
                 info!("Vault initialized successfully");
                 // Store the keys and root token from the initialization
-                keys = Some(init_keys.keys_base64.clone());
+                keys = Some(init_keys.keys_base64.clone().unwrap_or_default());
                 root_token = init_keys.root_token.clone();
 
                 // After initialization, we need to unseal the vault
@@ -472,6 +476,21 @@ async fn setup_root_vault(
                     Ok(Ok(unseal_status)) => {
                         if !unseal_status.sealed {
                             info!("Vault successfully unsealed");
+
+                            // Save credentials to database
+                            info!("Saving vault credentials to database");
+                            let credentials = merka_vault::database::VaultCredentials {
+                                root_unseal_keys: init_keys.keys_base64.clone().unwrap_or_default(),
+                                root_token: init_keys.root_token.clone(),
+                                sub_token: String::new(),
+                                transit_token: String::new(),
+                            };
+
+                            if let Err(e) = state.db_manager.save_vault_credentials(&credentials) {
+                                warn!("Failed to save credentials to database: {}", e);
+                            } else {
+                                info!("Root vault credentials saved to database");
+                            }
                         } else {
                             return HttpResponse::InternalServerError().json(ApiResponse::<()> {
                                 success: false,
@@ -523,13 +542,36 @@ async fn setup_root_vault(
         // For this example, we'll assume it's provided in the request if vault is already initialized
         if let Some(token) = req.token.clone() {
             info!("Using provided token for already initialized vault");
-            root_token = token;
+            root_token = token.clone();
+
+            // Save the token to database for future use
+            let credentials = merka_vault::database::VaultCredentials {
+                root_unseal_keys: Vec::new(), // We don't have unseal keys if vault is already initialized
+                root_token: token,
+                sub_token: String::new(),
+                transit_token: String::new(),
+            };
+
+            if let Err(e) = state.db_manager.save_vault_credentials(&credentials) {
+                warn!("Failed to save provided token to database: {}", e);
+            } else {
+                info!("Saved provided token to database for future use");
+            }
         } else {
-            return HttpResponse::BadRequest().json(ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some("Vault is already initialized but no token was provided".to_string()),
-            });
+            // Try to load token from database
+            match state.db_manager.load_vault_credentials() {
+                Ok(credentials) if !credentials.root_token.is_empty() => {
+                    info!("Using root token from database");
+                    root_token = credentials.root_token;
+                }
+                _ => {
+                    return HttpResponse::BadRequest().json(ApiResponse::<()> {
+                        success: false,
+                        data: None,
+                        error: Some("Vault is already initialized but no token was provided or found in database. Please provide a token.".to_string()),
+                    });
+                }
+            }
         }
     }
 
@@ -686,6 +728,26 @@ async fn setup_sub_vault(
         warn!("Failed to add unsealer relationship: {}", e);
     }
 
+    // Update the credentials in the database
+    // First load existing credentials
+    let mut credentials = match state.db_manager.load_vault_credentials() {
+        Ok(creds) => creds,
+        Err(e) => {
+            warn!("Failed to load existing credentials: {}", e);
+            merka_vault::database::VaultCredentials::default()
+        }
+    };
+
+    // Add the sub token
+    credentials.sub_token = sub_token.clone();
+
+    // Save updated credentials
+    if let Err(e) = state.db_manager.save_vault_credentials(&credentials) {
+        warn!("Failed to save updated credentials to database: {}", e);
+    } else {
+        info!("Updated credentials with sub vault token in database");
+    }
+
     // Return success with the sub vault token and recovery keys
     HttpResponse::Ok().json(ApiResponse {
         success: true,
@@ -718,6 +780,26 @@ async fn get_transit_token(
         Ok(Ok(token)) => {
             info!("Successfully obtained transit token for auto-unseal");
 
+            // Save the transit token to the database
+            // First load existing credentials
+            let mut credentials = match state.db_manager.load_vault_credentials() {
+                Ok(creds) => creds,
+                Err(e) => {
+                    warn!("Failed to load existing credentials: {}", e);
+                    merka_vault::database::VaultCredentials::default()
+                }
+            };
+
+            // Update the transit token
+            credentials.transit_token = token.clone();
+
+            // Save updated credentials
+            if let Err(e) = state.db_manager.save_vault_credentials(&credentials) {
+                warn!("Failed to save transit token to database: {}", e);
+            } else {
+                info!("Transit token saved to database");
+            }
+
             HttpResponse::Ok().json(ApiResponse {
                 success: true,
                 data: Some(serde_json::json!({
@@ -748,12 +830,116 @@ async fn get_transit_token(
     }
 }
 
+// Sync token for an existing initialized vault
+async fn sync_token(
+    state: web::Data<AppState>,
+    req: web::Json<SyncTokenRequest>,
+) -> impl Responder {
+    info!("Syncing token for existing vault at {}", req.addr);
+
+    // First make sure the vault is initialized and the token is valid
+    if let Err(e) = state.actor.send(SetCurrentAddress(req.addr.clone())).await {
+        return HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to set vault address: {}", e)),
+        });
+    }
+
+    // Check vault status
+    let status = match state.actor.send(CheckStatus).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to check vault status: {}", e)),
+            });
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(e.to_string()),
+            });
+        }
+    };
+
+    if !status.initialized {
+        return HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some("Vault is not initialized. Use /api/setup_root to initialize.".to_string()),
+        });
+    }
+
+    // Check if token is valid
+    let actor_clone = state.actor.clone();
+    let token_valid = match actor_clone
+        .send(VerifyTokenPermissions {
+            token: req.token.clone(),
+            key_name: String::new(), // Not needed for basic token verification
+        })
+        .await
+    {
+        Ok(Ok(valid)) => valid,
+        Ok(Err(e)) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to verify token: {}", e)),
+            });
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Actor error: {}", e)),
+            });
+        }
+    };
+
+    if !token_valid {
+        return HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some("Invalid token provided".to_string()),
+        });
+    }
+
+    // Token is valid, save to database
+    let credentials = merka_vault::database::VaultCredentials {
+        root_unseal_keys: Vec::new(), // We don't have unseal keys for existing vault
+        root_token: req.token.clone(),
+        sub_token: String::new(),
+        transit_token: String::new(),
+    };
+
+    if let Err(e) = state.db_manager.save_vault_credentials(&credentials) {
+        return HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to save credentials to database: {}", e)),
+        });
+    }
+
+    // Return success
+    HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({
+            "message": "Vault token successfully synchronized with database"
+        })),
+        error: None,
+    })
+}
+
 /// Main application entry point
 ///
 /// Starts the web server with the following components:
 /// - RESTful API for vault operations
 /// - Socket.IO server for real-time events
 /// - Event stream for actor system events
+/// - SQLite database for persistence
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Initialize logging
@@ -765,31 +951,78 @@ async fn main() -> std::io::Result<()> {
     info!("This example assumes you have started the docker-compose vaults");
     info!("Run with: `docker-compose up -d`");
 
-    // Create vault actor with broadcast channel
-    let (actor, event_rx) =
-        merka_vault::actor::start_vault_actor_with_channel("http://127.0.0.1:8200");
-
-    // Create a sender from the receiver
-    let (event_tx, _) = broadcast::channel(100);
-
-    // Subscribe to the original event_rx in a separate task
-    let event_tx_clone = event_tx.clone();
-    tokio::spawn(async move {
-        let mut rx = event_rx;
-        while let Ok(event) = rx.recv().await {
-            let _ = event_tx_clone.send(event);
+    // Initialize database
+    let db_path = "merka_vault.db";
+    let db_manager = match DatabaseManager::new(db_path) {
+        Ok(manager) => {
+            info!("Successfully initialized SQLite database at {}", db_path);
+            manager
         }
-    });
+        Err(e) => {
+            error!("Failed to initialize database: {}", e);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Database initialization failed: {}", e),
+            ));
+        }
+    };
+    let db_manager_arc = Arc::new(db_manager);
+
+    // Remove the old JSON credentials file if it exists
+    if std::path::Path::new("vault_credentials.json").exists() {
+        info!("Removing old vault_credentials.json file since we now use SQLite");
+        if let Err(e) = std::fs::remove_file("vault_credentials.json") {
+            warn!("Failed to remove old vault_credentials.json file: {}", e);
+        }
+    }
+
+    // Create vault actor with broadcast channel and database
+    let (tx, _) = broadcast::channel(100);
+    let actor = merka_vault::actor::VaultActor::new("http://127.0.0.1:8200", Some(tx.clone()))
+        .with_database(DatabaseManager::new(db_path).unwrap());
+    let actor_addr = actor.start();
 
     // Set up shared state
     let app_state = web::Data::new(AppState {
-        actor,
-        event_tx,
+        actor: actor_addr.clone(),
+        event_tx: tx,
         connections: Arc::new(Mutex::new(HashMap::new())),
+        db_manager: db_manager_arc.clone(),
     });
 
     // Start actor monitoring
     app_state.actor.do_send(CheckDependencies);
+
+    // Check if the vault is already initialized but we have no credentials
+    // This can happen when switching from file to SQLite storage
+    let check_db_path = db_path.to_string(); // Clone the path
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await; // Wait for actor to initialize
+
+        // Check vault status
+        if let Ok(Ok(status)) = actor_addr.send(CheckStatus).await {
+            if status.initialized {
+                info!(
+                    "Detected vault is already initialized, checking for credentials in database"
+                );
+
+                // Try to load credentials from DB
+                if let Ok(check_db) = DatabaseManager::new(&check_db_path) {
+                    match check_db.load_vault_credentials() {
+                        Ok(creds) if creds.root_token.is_empty() => {
+                            warn!("Vault is initialized but no token in database. If you know the root token, use /api/setup_root with the token parameter or /api/sync_token to save it.");
+                        }
+                        Ok(_) => {
+                            info!("Credentials found in database, vault is synchronized");
+                        }
+                        Err(e) => {
+                            warn!("Error loading credentials from database: {}. If you know the root token, use /api/setup_root with the token parameter or /api/sync_token to save it.", e);
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     // Create a SocketIo instance
     let io = SocketIo::builder()
@@ -822,7 +1055,8 @@ async fn main() -> std::io::Result<()> {
                     .route("/setup", web::post().to(setup))
                     .route("/setup_root", web::post().to(setup_root_vault))
                     .route("/setup_sub", web::post().to(setup_sub_vault))
-                    .route("/get_transit_token", web::post().to(get_transit_token)),
+                    .route("/get_transit_token", web::post().to(get_transit_token))
+                    .route("/sync_token", web::post().to(sync_token)),
             )
     })
     .bind("127.0.0.1:8080")?

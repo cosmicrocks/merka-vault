@@ -6,10 +6,12 @@
 
 pub mod actor;
 pub mod cli;
+pub mod database;
 pub mod interface;
 pub mod vault;
 
 pub use actor::VaultActor;
+pub use database::{DatabaseManager, VaultCredentials};
 
 /// Initialize logging for the application
 #[allow(dead_code)]

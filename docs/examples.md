@@ -66,7 +66,7 @@ The web server also provides Socket.IO events for real-time monitoring:
 
 ### Vault Credentials
 
-The web server saves vault credentials to a file (`vault_credentials.json`) by default, which includes:
+The web server saves vault credentials to a SQLite database (`merka_vault.db`) by default, which includes:
 
 - Unseal keys for the root vault
 - Root token for the root vault
@@ -112,7 +112,7 @@ The test client:
 
 ### Credential Management
 
-The test client saves and loads credentials from `vault_credentials.json`, making it easy to:
+The test client saves and loads credentials from the SQLite database, making it easy to:
 
 - Resume from a previous setup
 - Restart sub vaults with the correct transit token
