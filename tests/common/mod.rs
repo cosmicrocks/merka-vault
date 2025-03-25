@@ -94,7 +94,6 @@ fn create_base_vault_container() -> testcontainers::core::ContainerRequest<Gener
 }
 
 pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericImage> {
-    // updated return type
     match mode {
         VaultMode::Dev => create_base_vault_container()
             .with_env_var("VAULT_DEV_ROOT_TOKEN_ID", "root")
@@ -180,4 +179,106 @@ pub async fn setup_caddy_container(
     }
 
     image.start().await.unwrap()
+}
+
+/// Wait for a Vault server to become available with improved retry logic
+/// This ensures the Vault server is fully ready before tests proceed
+pub async fn wait_for_vault_ready(
+    vault_addr: &str,
+    max_retries: usize,
+    retry_delay_ms: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use reqwest::Client;
+    use std::time::Duration;
+    use tokio::time::sleep;
+    use tracing::{error, info, warn};
+
+    let client = Client::new();
+    let health_url = format!("{}/v1/sys/health", vault_addr);
+
+    info!("Waiting for Vault to be available at: {}", vault_addr);
+
+    for attempt in 1..=max_retries {
+        match client.get(&health_url).send().await {
+            Ok(response) => {
+                // Status 200: initialized, unsealed, and active
+                // Status 429: unsealed, standby
+                // Status 472: data recovery mode replication secondary and active
+                // Status 473: performance standby
+                // Status 501: not initialized
+                // Status 503: sealed
+                let status = response.status().as_u16();
+
+                match status {
+                    200 => {
+                        info!(
+                            "Vault ready (initialized, unsealed, active) after {} attempts",
+                            attempt
+                        );
+                        return Ok(());
+                    }
+                    429 => {
+                        info!("Vault ready (unsealed, standby) after {} attempts", attempt);
+                        return Ok(());
+                    }
+                    501 => {
+                        info!(
+                            "Vault available but not initialized after {} attempts",
+                            attempt
+                        );
+                        return Ok(());
+                    }
+                    503 => {
+                        warn!(
+                            "Vault is sealed on attempt {}/{}. Will retry...",
+                            attempt, max_retries
+                        );
+                    }
+                    _ => {
+                        warn!(
+                            "Vault responding with unexpected status {} on attempt {}/{}",
+                            status, attempt, max_retries
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                if attempt == max_retries {
+                    error!(
+                        "Failed to connect to Vault after {} attempts: {}",
+                        max_retries, e
+                    );
+                } else {
+                    warn!(
+                        "Failed to connect to Vault on attempt {}/{}: {}",
+                        attempt, max_retries, e
+                    );
+                }
+            }
+        }
+
+        if attempt < max_retries {
+            sleep(Duration::from_millis(retry_delay_ms)).await;
+        }
+    }
+
+    Err(format!("Vault not ready after {} attempts", max_retries).into())
+}
+
+/// Generates a unique identifier for test resources
+/// Use this to avoid collision between concurrent test runs
+pub fn generate_test_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let test_name = CURRENT_TEST_NAME
+        .get()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    format!("{}-{}", test_name, timestamp)
 }

@@ -42,7 +42,10 @@ mod tests {
         // Run the test client to verify functionality
         let result = rt.block_on(async {
             // Start the test client
-            let mut test_client = start_process("cargo", &["run", "--example", "test_client"]);
+            let mut test_client = start_process(
+                "cargo",
+                &["run", "--example", "test_client", "--restart-sub-vault"],
+            );
 
             // Wait for test client to complete
             thread::sleep(Duration::from_secs(35));

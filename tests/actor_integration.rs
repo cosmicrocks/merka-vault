@@ -1,7 +1,7 @@
 //! tests/actor_integration.rs
 
 mod common;
-use actix_rt::time::{sleep, timeout};
+use actix_rt::time::timeout;
 use common::{init_logging, setup_vault_container, VaultMode};
 use merka_vault::actor::{
     self, ActorError, AddUnsealerRelationship, AutoUnseal, CheckDependencies, CheckStatus,
@@ -40,7 +40,7 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
         "Waiting {}s for unsealer vault to initialize...",
         startup_wait.as_secs()
     );
-    sleep(startup_wait).await;
+    tokio::time::sleep(startup_wait).await;
 
     // --- STAGE 2: Initialize and unseal the vault with an actor ---
     info!("STAGE 2: Initializing unsealer vault via actor");
@@ -234,12 +234,14 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
     })
     .await;
 
-    let startup_wait = Duration::from_secs(5);
-    info!(
-        "Waiting {}s for target vault to start...",
-        startup_wait.as_secs()
+    // Wait for the target vault to be ready
+    info!("Waiting for target vault to be available...");
+    let target_url = format!(
+        "http://{}:{}",
+        target_container.get_host().await?,
+        target_container.get_host_port_ipv4(8200).await?
     );
-    sleep(startup_wait).await;
+    common::wait_for_vault_ready(&target_url, 10, 1000).await?;
 
     let target_host = target_container.get_host().await?;
     let target_port = target_container.get_host_port_ipv4(8200).await?;
@@ -374,7 +376,7 @@ async fn test_auto_unseal_dependency_monitoring() -> Result<(), Box<dyn std::err
 
     // Wait for container to be ready
     info!("Waiting for root Vault to be available...");
-    sleep(Duration::from_secs(10)).await;
+    common::wait_for_vault_ready(&root_addr, 10, 1000).await?;
 
     // Start actor with monitoring enabled
     let (actor, mut rx) = actor::start_vault_actor_with_channel(&root_addr);
@@ -405,7 +407,7 @@ async fn test_auto_unseal_dependency_monitoring() -> Result<(), Box<dyn std::err
                 break;
             }
             Ok(_) => {}
-            Err(_) => sleep(Duration::from_millis(100)).await,
+            Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
         }
     }
 
@@ -444,7 +446,7 @@ async fn test_auto_unseal_dependency_monitoring() -> Result<(), Box<dyn std::err
 
     // Give the system time to detect the relationship
     info!("Waiting for relationship to be detected...");
-    sleep(Duration::from_secs(2)).await;
+    common::wait_for_vault_ready(&sub_addr, 5, 500).await?;
 
     // --- STAGE 5: Register vaults and relationship with actor ---
     info!("STAGE 5: Registering vaults and relationship with actor");
@@ -514,8 +516,10 @@ async fn test_auto_unseal_dependency_monitoring() -> Result<(), Box<dyn std::err
         .await??;
 
     // Give time for the sealing to take effect
-    info!("Sleeping to allow for sealing to take effect");
-    sleep(Duration::from_secs(3)).await;
+    info!("Waiting for sealing to take effect");
+    // We intentionally sealed the root vault, so don't wait for it to be "ready" (unsealed)
+    // Instead, just give the system a moment to register the sealed state
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // --- STAGE 7: Check dependency status ---
     info!("STAGE 7: Checking dependency status");
@@ -581,7 +585,7 @@ async fn test_auto_unseal_dependency_monitoring() -> Result<(), Box<dyn std::err
             }
             Err(_) => {
                 // No events available, wait a bit
-                sleep(Duration::from_millis(200)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
     }

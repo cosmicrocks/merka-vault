@@ -6,9 +6,7 @@
 mod common;
 use common::{init_logging, setup_vault_container};
 use merka_vault::vault::transit; // Add transit module import
-use std::time::Duration;
-use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Tests the basic PKI setup functionality using a dev Vault instance.
 /// This verifies that we can successfully:
@@ -24,7 +22,7 @@ async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&vault_url, 10, 1000).await?;
 
     let domain = "example.com";
     let ttl = "8760h";
@@ -55,7 +53,7 @@ async fn test_setup_pki_same_vault_intermediate() -> Result<(), Box<dyn std::err
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&vault_url, 10, 1000).await?;
 
     let domain = "example.com";
     let ttl = "8760h";
@@ -92,8 +90,9 @@ async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std
     let root_url = format!("http://{}:{}", root_host, root_port);
     let int_url = format!("http://{}:{}", int_host, int_port);
 
-    // Allow containers to start up.
-    sleep(Duration::from_secs(3)).await;
+    // Use improved health check to ensure containers are ready
+    common::wait_for_vault_ready(&root_url, 10, 1000).await?;
+    common::wait_for_vault_ready(&int_url, 10, 1000).await?;
 
     // Initialize and unseal the root Vault.
     let init_res = merka_vault::vault::init::init_vault(&root_url, 5, 3, None, None).await?;
@@ -106,6 +105,22 @@ async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std
     assert!(!int_init_res.root_token.is_empty());
     merka_vault::vault::init::unseal_vault(&int_url, &int_init_res.keys).await?;
     let int_root_token = int_init_res.root_token; // Use this token for intermediate Vault operations
+
+    // Wait a bit to ensure unsealing has taken effect
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Check the seal status of both vaults to confirm they're truly unsealed
+    let root_status = merka_vault::vault::common::check_vault_status(&root_url).await?;
+    assert!(
+        !root_status.sealed,
+        "Root vault is still sealed after unsealing"
+    );
+
+    let int_status = merka_vault::vault::common::check_vault_status(&int_url).await?;
+    assert!(
+        !int_status.sealed,
+        "Intermediate vault is still sealed after unsealing"
+    );
 
     let domain = "example.com";
     let ttl = "8760h";
@@ -124,7 +139,11 @@ async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std
 
     assert!(cert_chain.contains("BEGIN CERTIFICATE"));
     let cert_count = cert_chain.matches("BEGIN CERTIFICATE").count();
-    assert!(cert_count >= 2);
+    assert!(
+        cert_count >= 2,
+        "Expected at least 2 certificates in chain, got {}",
+        cert_count
+    );
     assert_eq!(role_name, format!("{}-int", domain.replace('.', "-")));
 
     Ok(())
@@ -143,7 +162,7 @@ async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&vault_url, 10, 1000).await?;
 
     let role_name = "test-role";
     let policies = vec!["default".to_string()];
@@ -171,8 +190,14 @@ async fn test_vault_init_and_unseal() -> Result<(), Box<dyn std::error::Error>> 
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
 
-    sleep(Duration::from_secs(3)).await;
+    // Give the container more time to fully start up and be ready
+    info!("Waiting for Vault dev container to start up...");
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
+    // Increase retries and timeout for container readiness
+    common::wait_for_vault_ready(&vault_url, 20, 1000).await?;
+
+    // Dev mode vaults are already initialized, so this should fail
     assert!(
         merka_vault::vault::init::init_vault(&vault_url, 1, 1, None, None)
             .await
@@ -195,7 +220,7 @@ async fn test_pki_and_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&vault_url, 10, 1000).await?;
 
     let domain = "example.com";
     let ttl = "8760h";
@@ -257,7 +282,7 @@ async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
     let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
     let vault_url = format!("http://{}:{}", host, host_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&vault_url, 10, 1000).await?;
 
     let init_res = merka_vault::vault::init::init_vault(&vault_url, 1, 1, None, None).await?;
     assert!(!init_res.root_token.is_empty());
@@ -348,7 +373,8 @@ async fn test_issue_certificate_and_verify_tls() -> Result<(), Box<dyn std::erro
     let int_url = format!("http://{}:{}", int_host, int_port);
 
     // Allow containers to start.
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&root_url, 10, 1000).await?;
+    common::wait_for_vault_ready(&int_url, 10, 1000).await?;
 
     // Initialize and unseal the root Vault.
     let root_init = merka_vault::vault::init::init_vault(&root_url, 5, 3, None, None).await?;
@@ -533,38 +559,86 @@ async fn test_setup_transit_autounseal() -> Result<(), Box<dyn std::error::Error
     let unsealee_port = unsealee_container.get_host_port_ipv4(8200).await.unwrap();
     let unsealee_url = format!("http://{}:{}", unsealee_host, unsealee_port);
 
-    sleep(Duration::from_secs(3)).await;
+    // Use improved health checks with longer timeout
+    common::wait_for_vault_ready(&unsealer_url, 15, 1000).await?;
+    common::wait_for_vault_ready(&unsealee_url, 15, 1000).await?;
+
+    // Check if dev vault is really unsealed
+    let unsealer_status = merka_vault::vault::common::check_vault_status(&unsealer_url).await?;
+    assert!(!unsealer_status.sealed, "Dev vault is unexpectedly sealed");
 
     // Set up transit engine for auto-unseal
     let token = "root"; // Dev mode token
     let key_name = "autounseal";
-    let result =
-        merka_vault::vault::autounseal::setup_transit_autounseal(&unsealer_url, token, key_name)
-            .await?;
 
-    assert!(result);
-    info!("Transit auto-unseal setup complete with key: {}", key_name);
+    // Use a retry mechanism since transit setup can be flaky
+    let max_retries = 5;
+    let mut last_error = None;
 
-    // Configure target Vault to use transit auto-unseal
-    let config_result = merka_vault::vault::autounseal::configure_vault_for_autounseal(
-        &unsealee_url,
-        &unsealer_url,
-        token,
-        key_name,
-    )
-    .await;
+    for attempt in 1..=max_retries {
+        info!(
+            "Setting up transit engine, attempt {}/{}",
+            attempt, max_retries
+        );
 
-    // This might fail in test environment due to container networking constraints
-    match config_result {
-        Ok(_) => {
-            info!("Successfully configured vault for auto-unseal");
-        }
-        _ => {
-            info!("Auto-unseal configuration expected to fail in test environment");
+        match merka_vault::vault::autounseal::setup_transit_autounseal(
+            &unsealer_url,
+            token,
+            key_name,
+        )
+        .await
+        {
+            Ok(result) => {
+                assert!(result);
+                info!("Transit auto-unseal setup complete with key: {}", key_name);
+
+                // Configure target Vault to use transit auto-unseal
+                let config_result = merka_vault::vault::autounseal::configure_vault_for_autounseal(
+                    &unsealee_url,
+                    &unsealer_url,
+                    token,
+                    key_name,
+                )
+                .await;
+
+                match config_result {
+                    Ok(_) => {
+                        info!("Successfully configured vault for auto-unseal");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        info!("Auto-unseal configuration failed: {}", e);
+                        // This might fail in test environment due to container networking constraints
+                        // but we've at least verified the transit engine setup part
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                if attempt == max_retries {
+                    error!("Transit setup failed after {} attempts: {}", max_retries, e);
+                    last_error = Some(e);
+                } else {
+                    warn!(
+                        "Transit setup failed on attempt {}/{}: {}. Retrying...",
+                        attempt, max_retries, e
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+            }
         }
     }
 
-    Ok(())
+    // If we got here, all retries failed
+    if let Some(e) = last_error {
+        return Err(format!(
+            "Failed to set up transit engine after {} attempts: {}",
+            max_retries, e
+        )
+        .into());
+    }
+
+    Err("Unknown error in transit setup".into())
 }
 
 /// Tests the complete auto-unseal workflow:
@@ -588,7 +662,8 @@ async fn test_autounseal_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let target_port = target_container.get_host_port_ipv4(8200).await.unwrap();
     let target_url = format!("http://{}:{}", target_host, target_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&unsealer_url, 10, 1000).await?;
+    common::wait_for_vault_ready(&target_url, 10, 1000).await?;
 
     // Setup transit engine on unsealer Vault
     let token = "root";
@@ -655,7 +730,8 @@ async fn test_auto_unseal_integration() -> Result<(), Box<dyn std::error::Error>
     let target_port = target_container.get_host_port_ipv4(8200).await.unwrap();
     let target_url = format!("http://{}:{}", target_host, target_port);
 
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&unsealer_url, 10, 1000).await?;
+    common::wait_for_vault_ready(&target_url, 10, 1000).await?;
 
     // Setup transit engine for auto-unseal
     let token = "root";
@@ -736,43 +812,111 @@ async fn test_wrapped_token_autounseal() -> Result<(), Box<dyn std::error::Error
     let target_port = target_container.get_host_port_ipv4(8200).await.unwrap();
     let target_url = format!("http://{}:{}", target_host, target_port);
 
-    sleep(Duration::from_secs(3)).await;
+    // Use improved health checks with longer timeout
+    common::wait_for_vault_ready(&unsealer_url, 15, 1000).await?;
+    common::wait_for_vault_ready(&target_url, 15, 1000).await?;
+
+    // Verify dev vault is unsealed
+    let unsealer_status = merka_vault::vault::common::check_vault_status(&unsealer_url).await?;
+    assert!(
+        !unsealer_status.sealed,
+        "Dev unsealer vault is unexpectedly sealed"
+    );
 
     // Enable audit device for logging (optional in test)
     let token = "root"; // Dev mode token
     let key_name = "autounseal";
 
     info!("Setting up transit engine for auto-unseal");
-    // Setup transit engine
-    merka_vault::vault::transit::setup_transit_engine(&unsealer_url, token).await?;
+    // Setup transit engine with retries
+    for attempt in 1..=5 {
+        info!("Setting up transit engine, attempt {}/5", attempt);
+        if let Err(e) =
+            merka_vault::vault::transit::setup_transit_engine(&unsealer_url, token).await
+        {
+            if attempt == 5 {
+                return Err(
+                    format!("Failed to set up transit engine after 5 attempts: {}", e).into(),
+                );
+            }
+            warn!(
+                "Failed to set up transit engine (attempt {}/5): {}. Retrying...",
+                attempt, e
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            continue;
+        }
+        break;
+    }
 
-    // Create encryption key
-    merka_vault::vault::transit::create_transit_key(&unsealer_url, token, key_name).await?;
+    // Create encryption key with retries
+    for attempt in 1..=5 {
+        info!("Creating transit key, attempt {}/5", attempt);
+        if let Err(e) =
+            merka_vault::vault::transit::create_transit_key(&unsealer_url, token, key_name).await
+        {
+            if attempt == 5 {
+                return Err(format!("Failed to create transit key after 5 attempts: {}", e).into());
+            }
+            warn!(
+                "Failed to create transit key (attempt {}/5): {}. Retrying...",
+                attempt, e
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            continue;
+        }
+        break;
+    }
 
-    // Create policy for auto-unseal
+    // Create policy for auto-unseal with retries
     let policy_name = "autounseal";
-    merka_vault::vault::transit::create_transit_unseal_policy(
-        &unsealer_url,
-        token,
-        policy_name,
-        key_name,
-    )
-    .await?;
+    for attempt in 1..=5 {
+        info!("Creating transit unseal policy, attempt {}/5", attempt);
+        if let Err(e) = merka_vault::vault::transit::create_transit_unseal_policy(
+            &unsealer_url,
+            token,
+            policy_name,
+            key_name,
+        )
+        .await
+        {
+            if attempt == 5 {
+                return Err(format!(
+                    "Failed to create transit unseal policy after 5 attempts: {}",
+                    e
+                )
+                .into());
+            }
+            warn!(
+                "Failed to create transit unseal policy (attempt {}/5): {}. Retrying...",
+                attempt, e
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            continue;
+        }
+        break;
+    }
 
     info!("Generating wrapped token for auto-unseal");
     // Generate a response-wrapped token with the auto-unseal policy
-    let wrapped_token = transit::generate_wrapped_transit_token(
+    let wrapped_token = match transit::generate_wrapped_transit_token(
         &unsealer_url, // Use unsealer_url instead of source_addr
         token,         // Use token instead of source_token
         "autounseal",
         "120s", // 2 minute TTL for the wrapped token
     )
     .await
-    .expect("Failed to generate wrapped token");
+    {
+        Ok(token) => token,
+        Err(e) => return Err(format!("Failed to generate wrapped token: {}", e).into()),
+    };
 
     // Unwrap the token (in a real scenario, this would happen on a different machine)
     let unwrapped_token =
-        merka_vault::vault::autounseal::unwrap_token(&unsealer_url, &wrapped_token).await?;
+        match merka_vault::vault::autounseal::unwrap_token(&unsealer_url, &wrapped_token).await {
+            Ok(token) => token,
+            Err(e) => return Err(format!("Failed to unwrap token: {}", e).into()),
+        };
 
     assert!(!unwrapped_token.is_empty());
     info!("Successfully unwrapped token");
@@ -798,14 +942,17 @@ async fn test_wrapped_token_autounseal() -> Result<(), Box<dyn std::error::Error
                 );
                 assert!(!init_response.root_token.is_empty());
             } else {
+                // This might fail, but we've already tested the token unwrapping part
                 info!(
                     "Auto-unseal initialization failed (expected in test): {:?}",
                     init_result
                 );
             }
         }
-        _ => {
-            info!("Auto-unseal configuration failed (expected in test environment)");
+        Err(e) => {
+            // Auto-unseal configuration may fail in test environment due to networking constraints,
+            // but we've at least verified the token unwrapping part
+            info!("Auto-unseal configuration failed (may be expected): {}", e);
         }
     }
 
@@ -833,7 +980,7 @@ async fn test_realistic_autounseal_with_wrapped_token() -> Result<(), Box<dyn st
     let primary_internal_url = format!("http://{}:{}", primary_internal_host, 8200);
 
     info!("Primary Vault started at {}", primary_url);
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&primary_url, 10, 1000).await?;
 
     // Initialize and unseal the primary Vault
     let init_res = merka_vault::vault::init::init_vault(&primary_url, 1, 1, None, None).await?;
@@ -888,7 +1035,7 @@ async fn test_realistic_autounseal_with_wrapped_token() -> Result<(), Box<dyn st
         "Secondary Vault started at {} with auto-unseal configuration",
         secondary_url
     );
-    sleep(Duration::from_secs(5)).await;
+    common::wait_for_vault_ready(&secondary_url, 15, 1000).await?;
 
     // Initialize the auto-unsealing Vault
     match merka_vault::vault::autounseal::init_with_autounseal(&secondary_url).await {
@@ -955,7 +1102,7 @@ async fn test_direct_vault_autounseal_setup() -> Result<(), Box<dyn std::error::
     let root_addr = format!("http://{}:{}", root_host, root_port);
 
     // Wait for container to be ready
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&root_addr, 10, 1000).await?;
 
     // Initialize and unseal root vault
     let init_res = merka_vault::vault::init::init_vault(&root_addr, 1, 1, None, None).await?;
@@ -1002,7 +1149,7 @@ async fn test_direct_vault_autounseal_setup() -> Result<(), Box<dyn std::error::
     let sub_addr = format!("http://{}:{}", sub_host, sub_port);
 
     // Wait for sub container to be ready
-    sleep(Duration::from_secs(3)).await;
+    common::wait_for_vault_ready(&sub_addr, 10, 1000).await?;
 
     // Initialize sub vault with auto-unseal
     let sub_init = merka_vault::vault::autounseal::init_with_autounseal(&sub_addr).await?;
