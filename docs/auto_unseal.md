@@ -31,6 +31,25 @@ The auto-unseal process using the Transit engine follows this workflow:
 - **Transit Key**: Encryption key in the Transit engine used for sealing/unsealing
 - **Recovery Keys**: Special keys used to recover the target Vault if the unsealer is unavailable
 
+## Critical Implementation Details
+
+### Initialization and Unsealing Sequence
+
+The proper sequence for setting up auto-unseal is crucial:
+
+1. **Initialize Root Vault**: Create unseal keys and root token
+2. **Unseal Root Vault**: Provide enough unseal keys to reach the threshold
+   - **Important**: The vault MUST be unsealed before you can set up the transit engine
+3. **Setup Transit Engine**: Configure the transit encryption engine (requires unsealed vault)
+4. **Generate Transit Token**: Create a token with permissions for auto-unsealing
+5. **Restart Sub Vault**: Run with the transit token as `VAULT_TOKEN`
+6. **Initialize Sub Vault**: With auto-unseal configuration enabled
+   - Note: When using transit auto-unseal, use the `AutoUnseal` method instead of `InitVault`
+   - The parameters `secret_shares` and `secret_threshold` are not applicable to transit seal type
+7. **Setup PKI**: Configure the PKI infrastructure in the sub vault
+
+Failing to follow this sequence often leads to errors like "Vault is sealed" when attempting to set up the transit engine.
+
 ## Auto-Unseal Flow
 
 1. **Setup Phase**:
@@ -64,22 +83,35 @@ This module contains the core functions for auto-unseal:
 - `configure_vault_for_autounseal`: Configures a target Vault to use Transit auto-unseal
 - `init_with_autounseal`: Initializes a Vault with auto-unseal settings
 
+### `actor` Module
+
+The actor-based API provides a thread-safe interface for auto-unseal operations:
+
+- `SetupTransit`: Message to set up the transit engine with a specific key name
+- `AutoUnseal`: Message to initialize a vault with auto-unseal configuration
+- `GetUnwrappedTransitToken`: Message to retrieve a transit token for auto-unsealing
+
 ### Setup Process
 
 #### 1. Prepare the Unsealer Vault
 
 ```rust
-// Setup Transit engine for auto-unseal
-let unsealer_vault_url = "http://unsealer-vault:8200";
-let token = "root_token_of_unsealer";
-let key_name = "auto-unseal-key";
+// Initialize and unseal the vault first
+let init_result = actor.send(InitVault {
+    secret_shares: 1,
+    secret_threshold: 1,
+}).await??;
 
-// Set up the Transit engine and create encryption key
-let result = merka_vault::vault::autounseal::setup_transit_autounseal(
-    &unsealer_vault_url,
-    token,
-    key_name
-).await?;
+// Unseal the vault with the keys
+actor.send(UnsealVault {
+    keys: init_result.keys,
+}).await??;
+
+// Now set up the transit engine (REQUIRES the vault to be unsealed)
+actor.send(SetupTransit {
+    token: init_result.root_token.clone(),
+    key_name: "autounseal-key",
+}).await??;
 ```
 
 This performs:
@@ -87,36 +119,34 @@ This performs:
 - Enabling the Transit secrets engine if not already enabled
 - Creating an encryption key specifically for auto-unsealing
 - Configuring the key to be exportable and allow deletion if needed
+- Creating a policy with minimal permissions for auto-unsealing
 
-#### 2. Configure the Target Vault
+#### 2. Generate a Transit Token
 
 ```rust
-// Configure target Vault to use the unsealer Vault
-let target_vault_url = "http://target-vault:8200";
-let config_result = merka_vault::vault::autounseal::configure_vault_for_autounseal(
-    &target_vault_url,
-    &unsealer_vault_url,
-    token,
-    key_name,
-).await?;
+// Generate an unwrapped transit token
+let unwrapped_token = actor.send(GetUnwrappedTransitToken {
+    root_addr: "http://unsealer-vault:8200".to_string(),
+    root_token: init_result.root_token.clone(),
+    key_name: "autounseal-key".to_string(),
+}).await??;
+
+// The sub vault must be restarted with this token as VAULT_TOKEN
+// VAULT_TOKEN=<unwrapped_token> docker-compose up -d sub-vault
 ```
-
-This configures the target Vault's configuration to:
-
-- Set the seal type to "transit"
-- Specify the unsealer Vault's address
-- Configure the token to use for Transit operations
-- Set the key name to use for encryption/decryption
 
 #### 3. Initialize with Auto-Unseal
 
 ```rust
+// Point the actor at the sub vault
+actor.send(SetCurrentAddress("http://target-vault:8200".to_string())).await??;
+
 // Initialize the target Vault with auto-unseal
-let init_result = merka_vault::vault::autounseal::init_with_autounseal(&target_vault_url).await?;
+let auto_unseal_result = actor.send(AutoUnseal {}).await??;
 
 // Store the recovery keys securely
-let recovery_keys = init_result.recovery_keys.unwrap_or_default();
-let root_token = init_result.root_token;
+let recovery_keys = auto_unseal_result.recovery_keys.unwrap_or_default();
+let sub_token = auto_unseal_result.root_token;
 ```
 
 This initializes the Vault with:
@@ -124,6 +154,29 @@ This initializes the Vault with:
 - Recovery keys instead of unseal keys
 - Default recovery configuration (5 shares, 3 threshold)
 - Master key encryption handled by the Transit engine
+
+### Web Server Implementation
+
+The web server example in `examples/web_server.rs` demonstrates a complete auto-unseal setup:
+
+```rust
+// 1. Set up root vault (initialize, unseal, configure transit)
+async fn setup_root_vault(state: web::Data<AppState>, req: web::Json<SetupRootRequest>) -> impl Responder {
+    // Initialize the vault if not already initialized
+
+    // CRITICAL: Unseal the vault before setting up transit
+
+    // Set up transit engine with the key name
+}
+
+// 2. Set up sub vault with auto-unseal
+async fn setup_sub_vault(state: web::Data<AppState>, req: web::Json<SetupSubRequest>) -> impl Responder {
+    // Initialize sub-vault with auto unseal
+    let auto_unseal_result = state.actor.send(AutoUnseal {}).await;
+
+    // Set up PKI using the sub vault token
+}
+```
 
 ### Security Considerations
 
@@ -167,18 +220,24 @@ merka-vault --vault-addr="http://unsealer-vault:8200" transit generate-token --p
 
 ### Common Issues
 
-1. **Connection Problems**:
+1. **"Vault is sealed" Error**:
+
+   - This usually means you're trying to set up the transit engine before unsealing the vault
+   - Ensure you unseal the root vault BEFORE attempting to set up transit
+
+2. **Connection Problems**:
 
    - Ensure both Vaults can communicate over the network
    - Check for TLS certificate issues if using HTTPS
 
-2. **Permission Denied**:
+3. **Permission Denied**:
 
    - Verify the token has sufficient permissions on the Transit key
    - Check if the Transit engine is enabled and accessible
 
-3. **Initialization Failures**:
-   - Confirm the target Vault configuration is correct
+4. **Initialization Failures**:
+   - For transit auto-unseal, use `AutoUnseal` instead of `InitVault`
+   - Parameters like `secret_shares` and `secret_threshold` are not applicable to transit seal
    - Ensure the unsealer Vault is available during initialization
 
 ### Logs to Check

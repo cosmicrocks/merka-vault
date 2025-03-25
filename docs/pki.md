@@ -31,6 +31,98 @@ The PKI infrastructure in Vault typically follows this structure:
 - **Certificates**: The resulting TLS/SSL certificates used by applications
 - **CRL**: Certificate Revocation List for invalidating certificates
 
+## Integration with Auto-Unseal
+
+PKI setup works best after a successful auto-unseal process:
+
+1. Set up and unseal the root vault
+2. Configure transit engine and generate a transit token
+3. Restart the sub vault with the transit token
+4. Initialize the sub vault with auto-unseal
+5. Set up PKI in the sub vault (using the sub vault token)
+
+This ensures proper authentication and permissions for the PKI operations.
+
+## Implementation in `merka-vault`
+
+The PKI functionality in `merka-vault` is implemented in the actor-based API with the `vault::pki` module.
+
+### Key Components
+
+1. The `SetupPki` message in the actor system:
+
+   ```rust
+   pub struct SetupPki {
+       pub role_name: String,
+   }
+   ```
+
+2. The `PkiResult` struct that contains the setup result:
+
+   ```rust
+   pub struct PkiResult {
+       pub cert_chain: String,
+       pub role_name: String,
+   }
+   ```
+
+3. The underlying implementation functions in the `vault::pki` module:
+   - `setup_pki`: Sets up root CA with optional same-vault intermediate
+   - `setup_pki_intermediate`: Sets up a root CA in one Vault and an intermediate in another
+   - `issue_certificate`: Issues end-entity certificates using a configured role
+
+### Web Server Example Implementation
+
+In the web server example (`examples/web_server.rs`), the PKI setup happens as part of the sub vault configuration:
+
+```rust
+async fn setup_sub_vault(state: web::Data<AppState>, req: web::Json<SetupSubRequest>) -> impl Responder {
+    // First initialize the sub vault with auto-unseal
+    let auto_unseal_result = match state.actor.send(AutoUnseal {}).await {
+        Ok(Ok(result)) => result,
+        // Error handling...
+    };
+
+    let sub_token = auto_unseal_result.root_token.clone();
+
+    // We need to use the sub vault token to set up PKI
+    // This ensures proper authentication for PKI operations
+    if let Err(e) = state.actor.send(UnsealVault {
+        keys: vec![sub_token.clone()],
+    }).await {
+        // Error handling...
+    }
+
+    // Now set up PKI with the role name
+    let role_name = "merka";
+    let pki_result = match state.actor.send(SetupPki {
+        role_name: role_name.to_string()
+    }).await {
+        Ok(Ok(pki_result)) => pki_result,
+        // Error handling...
+    };
+
+    // Return the PKI setup results
+    HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({
+            "sub_token": sub_token,
+            "recovery_keys": auto_unseal_result.recovery_keys,
+            "pki_role_name": pki_result.role_name,
+            "pki_cert_chain": pki_result.cert_chain
+        })),
+        error: None,
+    })
+}
+```
+
+Key aspects of this implementation:
+
+1. PKI setup happens **after** successful auto-unseal
+2. It uses the sub vault token to authenticate PKI operations
+3. It creates a role for certificate issuance
+4. It returns the certificate chain and role name for future use
+
 ## PKI Setup Flow
 
 ### 1. Root CA Setup
@@ -153,38 +245,36 @@ This:
 - Sets the appropriate TTL for the certificate
 - Includes the correct certificate chain
 
-## Implementation in `merka-vault`
+## Using the Actor-Based API
 
-The PKI functionality in `merka-vault` is implemented in the `vault::pki` module.
+For a more thread-safe approach, use the actor-based API:
 
-### Key Functions
+```rust
+// Initialize the actor
+let (actor, mut events) = start_vault_actor_with_channel("http://127.0.0.1:8200");
 
-- `setup_pki`: Sets up root CA with optional same-vault intermediate
-- `setup_pki_intermediate`: Sets up a root CA in one Vault and an intermediate in another
-- `issue_certificate`: Issues end-entity certificates using a configured role
+// Set up PKI with role name
+let pki_result = actor.send(SetupPki {
+    role_name: "example-com".to_string()
+}).await??;
 
-### Root PKI Setup Process
+// Access the certificate chain and role name
+let cert_chain = pki_result.cert_chain;
+let role_name = pki_result.role_name;
 
-1. **Mount PKI Engine**: A PKI secrets engine is mounted at path `/pki/`
-2. **Generate Root CA**: A self-signed root CA is generated with the specified TTL
-3. **Configure CA URLs**: CRL distribution and issuing certificate URLs are configured
-4. **Create Role**: A role is created to define what certificates can be issued
-
-### Intermediate CA Setup Process
-
-1. **Mount Intermediate PKI Engine**: A PKI secrets engine is mounted at path `/pki_int/`
-2. **Generate CSR**: A certificate signing request is generated
-3. **Sign with Root CA**: The root CA signs the intermediate CSR
-4. **Import Certificate**: The signed certificate is imported into the intermediate PKI engine
-5. **Configure CA URLs**: CRL distribution and issuing certificate URLs are configured
-6. **Create Role**: A role is created to define what certificates can be issued
-
-### Certificate Issuance Process
-
-1. **Request Certificate**: A certificate request is sent to the configured role
-2. **Validation**: The Vault validates the request against the role parameters
-3. **CA Signing**: The CA signs the certificate with appropriate extensions
-4. **Return Certificate**: The certificate, key, and CA chain are returned
+// Monitor PKI setup events from the actor
+tokio::spawn(async move {
+    while let Ok(event) = events.recv().await {
+        match event {
+            VaultEvent::PkiSetupComplete { role_name, cert_chain } => {
+                println!("PKI setup completed for role: {}", role_name);
+                // Use the certificate chain
+            }
+            _ => {} // Ignore other events
+        }
+    }
+});
+```
 
 ## Best Practices
 
@@ -269,9 +359,15 @@ merka-vault --vault-addr=http://vault:8200 pki issue \
    - Ensure the role allows the requested domains
 
 3. **TTL Issues**:
+
    - Ensure the requested TTL doesn't exceed the role's max TTL
    - Check that the intermediate CA's TTL doesn't limit certificate TTL
    - Verify certificates aren't expired
+
+4. **Authentication Issues**:
+   - Ensure you're using the correct token for PKI operations
+   - Verify the token has permissions on the PKI path
+   - For sub vaults, make sure to use the sub vault token, not the root vault token
 
 ### Logs to Check
 

@@ -13,6 +13,10 @@ run *ARGS:
 watch *ARGS:
 	bacon --job run -- -- {{ ARGS }}
 
+# Watch and run an example with auto-recompiling
+watch-server *ARGS:
+	bacon --job run -- --example web_server -- {{ ARGS }}
+
 # Build the library and binary
 build:
     cargo build --all
