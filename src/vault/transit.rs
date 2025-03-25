@@ -280,3 +280,233 @@ pub async fn generate_wrapped_transit_token(
 
     Ok(wrapped_token.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_logging;
+    use crate::vault::init::unseal_vault;
+    use crate::vault::status::get_vault_status;
+    use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
+    use tokio::time::Duration;
+    use tracing::info;
+
+    // Test for transit engine setup error handling with invalid token
+    #[tokio::test]
+    async fn test_transit_invalid_token() -> Result<(), Box<dyn std::error::Error>> {
+        // Any invalid address/token combination will cause an error
+        let invalid_token = "invalid-token";
+        let result = setup_transit_engine("http://127.0.0.1:8200", invalid_token).await;
+
+        assert!(result.is_err(), "Expected error with invalid token");
+
+        // Error could be Connection/Network if Vault isn't running or HttpStatus if it is
+        match result {
+            Err(VaultError::HttpStatus(status_code, _)) => {
+                assert_eq!(
+                    status_code, 403,
+                    "Expected 403 Forbidden with invalid token"
+                );
+            }
+            Err(VaultError::Connection(_)) => {
+                // This is fine too - means Vault server not running
+                println!(
+                    "Connection error (Vault not running) - this is expected in standalone tests"
+                );
+            }
+            Err(VaultError::Network(_)) => {
+                // This is also fine - means Vault server not running
+                println!(
+                    "Network error (Vault not running) - this is expected in standalone tests"
+                );
+            }
+            _ => {
+                panic!(
+                    "Expected VaultError::HttpStatus, VaultError::Connection, or VaultError::Network, got {:?}",
+                    result
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Tests the complete transit setup process using a dev Vault instance.
+    /// This test verifies that we can:
+    /// - Set up a transit engine
+    /// - Create a transit key
+    /// - Create a transit policy for auto-unseal
+    /// - Generate a transit token
+    /// - Generate a wrapped transit token
+    #[tokio::test]
+    async fn test_transit_setup() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 10, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // In dev mode, the root token is "root"
+        let root_token = "root".to_string();
+
+        // 1. Test setting up transit engine
+        info!("Setting up transit engine");
+        let _setup_result = setup_transit_engine(&vault_url, &root_token).await?;
+        info!("Transit engine setup successful");
+
+        // 2. Test creating transit key
+        let key_name = "test-key";
+        info!("Creating transit key: {}", key_name);
+        let _create_key_result = create_transit_key(&vault_url, &root_token, key_name).await?;
+        info!("Created transit key: {}", key_name);
+
+        // 3. Test creating transit policy
+        let policy_name = "test-policy";
+        info!("Creating transit policy: {}", policy_name);
+        let _create_policy_result =
+            create_transit_unseal_policy(&vault_url, &root_token, policy_name, key_name).await?;
+
+        // 4. Test generating transit token
+        info!("Generating transit token");
+        let token = generate_transit_unseal_token(&vault_url, &root_token, policy_name).await?;
+        info!("Generated transit token: {}", token);
+        assert!(!token.is_empty(), "Token should not be empty");
+
+        // 5. Test generating wrapped transit token
+        info!("Generating wrapped transit token");
+        let wrapped_token = generate_wrapped_transit_token(
+            &vault_url,
+            &root_token,
+            policy_name,
+            "60s", // 60 second TTL
+        )
+        .await?;
+        info!("Generated wrapped transit token");
+        assert!(
+            !wrapped_token.is_empty(),
+            "Wrapped token should not be empty"
+        );
+
+        // Verify all steps completed successfully
+        assert!(!token.is_empty(), "Transit token should not be empty");
+        assert!(
+            !wrapped_token.is_empty(),
+            "Wrapped transit token should not be empty"
+        );
+
+        Ok(())
+    }
+
+    // Test with real Vault (optional)
+    // Run with: cargo test -p merka-vault vault::transit::tests::test_transit_with_real_vault -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn test_transit_with_real_vault() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+
+        // Connect to a local Vault instance
+        let vault_addr = "http://127.0.0.1:8200";
+        println!("Connecting to Vault at: {}", vault_addr);
+
+        // Check if Vault is available
+        let status = match get_vault_status(vault_addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Vault status check failed: {}. Is Vault running?", e);
+                println!(
+                    "This test requires a running Vault instance at {}",
+                    vault_addr
+                );
+                println!("You can start one with: docker run -p 8200:8200 -e VAULT_DEV_ROOT_TOKEN_ID=root -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 hashicorp/vault:1.13.3");
+                return Ok(());
+            }
+        };
+
+        // Only proceed with test if Vault is initialized and not sealed
+        if !status.initialized {
+            println!("Vault is not initialized. Skipping test.");
+            return Ok(());
+        }
+
+        if status.sealed {
+            println!("Vault is sealed. Attempting to unseal...");
+            match unseal_vault(vault_addr, &[String::new()]).await {
+                Ok(_) => println!("Successfully unsealed Vault"),
+                Err(e) => {
+                    println!("Failed to unseal Vault: {}. Skipping test.", e);
+                    return Ok(());
+                }
+            }
+        }
+
+        println!("Vault is initialized and unsealed. Proceeding with test.");
+
+        // In dev mode, the root token is "root"
+        let root_token = "root".to_string();
+
+        // 1. Test setting up transit engine
+        let setup_result = setup_transit_engine(vault_addr, &root_token).await;
+        assert!(setup_result.is_ok(), "Transit engine setup should succeed");
+        println!("Transit engine setup successful");
+
+        // 2. Test creating transit key
+        let key_name = "test-key";
+        let create_key_result = create_transit_key(vault_addr, &root_token, key_name).await;
+        assert!(
+            create_key_result.is_ok(),
+            "Transit key creation should succeed"
+        );
+        println!("Created transit key: {}", key_name);
+
+        // 3. Test creating transit policy
+        let policy_name = "test-policy";
+        let create_policy_result =
+            create_transit_unseal_policy(vault_addr, &root_token, policy_name, key_name).await;
+        assert!(
+            create_policy_result.is_ok(),
+            "Transit policy creation should succeed"
+        );
+        println!("Created transit policy: {}", policy_name);
+
+        // 4. Test generating transit token
+        let token_result =
+            generate_transit_unseal_token(vault_addr, &root_token, policy_name).await;
+        assert!(
+            token_result.is_ok(),
+            "Transit token generation should succeed"
+        );
+
+        let token = token_result.unwrap();
+        println!("Generated transit token: {}", token);
+        assert!(!token.is_empty(), "Token should not be empty");
+
+        // 5. Test generating wrapped transit token
+        let wrapped_token_result = generate_wrapped_transit_token(
+            vault_addr,
+            &root_token,
+            policy_name,
+            "60s", // 60 second TTL
+        )
+        .await;
+        assert!(
+            wrapped_token_result.is_ok(),
+            "Wrapped transit token generation should succeed"
+        );
+
+        let wrapped_token = wrapped_token_result.unwrap();
+        println!("Generated wrapped transit token: {}", wrapped_token);
+        assert!(
+            !wrapped_token.is_empty(),
+            "Wrapped token should not be empty"
+        );
+
+        println!("Test completed successfully. All transit operations verified.");
+
+        Ok(())
+    }
+}

@@ -13,7 +13,9 @@ Merka Vault is a tool that simplifies the management of HashiCorp Vault, focusin
 - Configure Transit-based auto-unsealing between Vault instances
 - Set up PKI secrets engine with hierarchical CA support
 - Interactive setup wizard for guided configuration
-- Web server example with REST API and Socket.IO events
+- Web server with REST API and Socket.IO events for real-time monitoring
+- SQLite database integration for credential storage and vault relationships
+- Actor-based architecture for thread-safe operations
 - Comprehensive error handling and validation
 
 ## CLI Usage
@@ -33,47 +35,68 @@ merka-vault auto-unseal --transit-mount="transit" --key-name="auto-unseal"
 
 # Use the setup wizard
 merka-vault wizard
+
+# Start the web server
+merka-vault server --listen-addr="127.0.0.1:8080" --vault-addr="http://127.0.0.1:8200" --db-path="merka_vault.db"
 ```
 
 ## Programmatic Usage
 
 ```rust
-use merka_vault::actor::{InitVault, UnsealVault, SetupPki, start_vault_actor};
+use merka_vault::actor::{InitVault, UnsealVault, SetupPki, VaultActor};
+use merka_vault::database::DatabaseManager;
+use tokio::sync::broadcast;
 
-// Create an actor for thread-safe operations
-let actor = start_vault_actor("http://127.0.0.1:8200");
+// Initialize database
+let db_manager = DatabaseManager::new("merka_vault.db").unwrap();
+
+// Create actor with database for thread-safe operations
+let (tx, rx) = broadcast::channel(100);
+let actor = VaultActor::new("http://127.0.0.1:8200", Some(tx))
+    .with_database(db_manager);
+let actor_addr = actor.start();
 
 // Initialize the vault
-let init_result = actor.send(InitVault {
+let init_result = actor_addr.send(InitVault {
     secret_shares: 1,
     secret_threshold: 1,
 }).await??;
 
 // Unseal the vault
-let unseal_result = actor.send(UnsealVault {
+let unseal_result = actor_addr.send(UnsealVault {
     keys: init_result.keys,
 }).await??;
 
 // Setup PKI
-let pki_result = actor.send(SetupPki {
+let pki_result = actor_addr.send(SetupPki {
     role_name: "example-com".to_string(),
 }).await??;
 ```
 
-## Web Server Example
+## Web Server Integration
 
-The project includes a complete web server implementation with REST API and WebSocket events.
+The project includes a complete web server implementation with REST API and WebSocket events, backed by SQLite storage.
 
 ```bash
 # Start the vaults
 docker compose up -d
 
 # Run the web server
+cargo run -- server
+
+# Or run the example directly
 cargo run --example web_server
 
 # Run the test client
 cargo run --example test_client -- --restart-sub-vault
 ```
+
+The web server includes:
+
+- **REST API** for all vault operations
+- **Socket.IO** for real-time event notifications
+- **SQLite storage** for credentials and vault relationships
+- **Actix Actor** system for concurrent operations
 
 For more details, see the [Examples Documentation](./docs/examples.md).
 
@@ -100,12 +123,29 @@ cargo build
 # Run tests
 cargo test
 
+# Run module-specific tests
+cargo test -p merka-vault --lib -- vault::pki::tests
+cargo test -p merka-vault --lib -- vault::transit::tests
+cargo test -p merka-vault --lib -- vault::auth::tests
+
+# Run integration tests
+cargo test -p merka-vault --test
+
 # Run with logging
 RUST_LOG=debug cargo run -- init
 
 # Build release version
 cargo build --release
 ```
+
+## Recent Changes
+
+- **Improved Testing**: Migrated integration tests to module-specific tests for better organization and maintainability
+- **Test Utilities**: Enhanced test_utils.rs to support container-based testing for all modules
+- **SQLite Integration**: Replaced file-based credential storage with a robust SQLite database
+- **Web Server Improvements**: Enhanced Socket.IO implementation with proper local task handling
+- **CLI Commands**: Added new `server` command for starting the web server
+- **Database Schema**: Added support for storing vault relationships
 
 ## Documentation
 
@@ -115,6 +155,8 @@ Detailed documentation is available in the `/docs` directory:
 - [PKI Documentation](./docs/pki.md)
 - [Operations Overview](./docs/operations_overview.md)
 - [Examples Documentation](./docs/examples.md)
+- [SQLite Database Integration](./docs/database.md)
+- [Testing Guide](./docs/testing.md)
 
 ## Contributing
 

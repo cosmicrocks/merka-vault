@@ -1,4 +1,20 @@
-//! Vault client library for managing and interacting with HashiCorp Vault.
+//! Vault module for the Merka Vault library
+//!
+//! This module implements the core functionality for interacting with HashiCorp Vault.
+//! It provides low-level operations that should be coordinated through the actor module.
+//!
+//! ## Architectural role:
+//! - Implements core vault operations (initialization, unseal, etc.)
+//! - Should be accessed through the actor module by the server
+//! - May be accessed directly by the CLI module
+//! - Is not exposed directly to external users of the library (pub(crate))
+//!
+//! ## Testing strategy:
+//! - Each module contains its own unit tests within a `#[cfg(test)] mod tests` block
+//! - Tests use Docker containers via the `test_utils.rs` module when needed
+//! - Tests validate both success paths and error handling scenarios
+//! - The `test_utils.rs` module provides helper functions for setting up test environments
+//! - Integration tests in the `tests/` directory test cross-module functionality
 
 pub mod auth;
 pub mod autounseal;
@@ -12,6 +28,8 @@ pub mod seal;
 pub mod setup_root;
 pub mod setup_sub;
 pub mod status;
+#[cfg(test)]
+pub mod test_utils;
 pub mod transit;
 pub mod wizard;
 

@@ -1,7 +1,13 @@
-//! Database module for merka-vault
+//! Database module for the Merka Vault library
 //!
-//! This module provides SQLite database functionality for storing vault credentials
-//! and relationships between vaults, replacing file-based storage.
+//! This module implements the SQLite-based persistence layer for the Merka Vault library.
+//! It is primarily accessed through the actor module, which ensures proper coordination
+//! of database operations with vault operations.
+//!
+//! Architectural role:
+//! - Provides persistence for vault credentials and relationships
+//! - Should be accessed through the actor module rather than directly
+//! - Manages connection pooling and transaction handling
 
 use log::{debug, error, info, warn};
 use r2d2::{Pool, PooledConnection};

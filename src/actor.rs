@@ -1,3 +1,18 @@
+//! Actor module for the Merka Vault library
+//!
+//! This module implements the Actix-based actor system for the Merka Vault library.
+//! It serves as the core domain layer that coordinates interactions between the API layers
+//! (server, CLI) and the implementation layers (vault, database).
+//!
+//! Architectural role:
+//! - The actor module is the central coordinator for all vault operations
+//! - It manages state and persistence through the database module
+//! - It delegates vault operations to the vault module
+//! - It provides a message-based API for the server and CLI modules
+//!
+//! This design ensures clean separation of concerns and prevents direct access to
+//! implementation details from the API layers.
+
 use actix::prelude::*;
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -133,6 +148,24 @@ pub enum VaultEvent {
     },
 }
 
+/// Public struct containing vault status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusInfo {
+    pub initialized: bool,
+    pub sealed: bool,
+    pub standby: bool,
+}
+
+impl From<VaultStatus> for StatusInfo {
+    fn from(status: VaultStatus) -> Self {
+        Self {
+            initialized: status.initialized,
+            sealed: status.sealed,
+            standby: status.standby,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct VaultActor {
     pub vault_addr: String,
@@ -175,19 +208,49 @@ impl VaultActor {
 
     /// Set the database manager for persistent storage
     pub fn with_database(mut self, db_manager: DatabaseManager) -> Self {
-        // Load unsealer relationships from database
-        if let Ok(relationships) = db_manager.load_unsealer_relationships() {
-            let relationship_count = relationships.len();
-            self.unsealer_relationships = relationships;
-            info!(
-                "Loaded {} unsealer relationships from database",
-                relationship_count
-            );
-        } else {
-            error!("Failed to load unsealer relationships from database");
+        self.db_manager = Some(Arc::new(db_manager));
+
+        // Try to load vault credentials from the database if we don't have a token yet
+        if self.root_token.is_none() && self.db_manager.is_some() {
+            if let Some(db) = &self.db_manager {
+                match db.load_vault_credentials() {
+                    Ok(credentials) => {
+                        if !credentials.root_token.is_empty() {
+                            info!(
+                                "Loaded root token from database for vault {}",
+                                self.vault_addr
+                            );
+                            self.root_token = Some(credentials.root_token);
+                        } else {
+                            warn!(
+                                "Root token in database is empty for vault {}",
+                                self.vault_addr
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load credentials from database: {}", e);
+                    }
+                }
+            }
         }
 
-        self.db_manager = Some(Arc::new(db_manager));
+        // Also load unsealer relationships
+        if let Some(db) = &self.db_manager {
+            match db.load_unsealer_relationships() {
+                Ok(relationships) => {
+                    info!(
+                        "Loaded {} unsealer relationships from database",
+                        relationships.len()
+                    );
+                    self.unsealer_relationships = relationships;
+                }
+                Err(e) => {
+                    warn!("Failed to load unsealer relationships from database: {}", e);
+                }
+            }
+        }
+
         self
     }
 
@@ -715,16 +778,21 @@ impl Handler<UnsealVault> for VaultActor {
 
 /// Message for checking status
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<VaultStatus, ActorError>")]
+#[rtype(result = "Result<StatusInfo, ActorError>")]
 pub struct CheckStatus;
 
 impl Handler<CheckStatus> for VaultActor {
-    type Result = ResponseFuture<Result<VaultStatus, ActorError>>;
+    type Result = ResponseFuture<Result<StatusInfo, ActorError>>;
 
     fn handle(&mut self, _: CheckStatus, _ctx: &mut Context<Self>) -> Self::Result {
+        let addr = self.vault_addr.clone();
         let actor = self.clone();
-        let addr = actor.vault_addr.clone();
-        async move { actor.check_status(&addr).await.map_err(ActorError::from) }.boxed_local()
+        Box::pin(async move {
+            match actor.status().await {
+                Ok(status) => Ok(StatusInfo::from(status)),
+                Err(e) => Err(e.into()),
+            }
+        })
     }
 }
 
@@ -1435,8 +1503,31 @@ impl Handler<SetCurrentAddress> for VaultActor {
     type Result = ResponseFuture<Result<(), ActorError>>;
 
     fn handle(&mut self, msg: SetCurrentAddress, _ctx: &mut Context<Self>) -> Self::Result {
-        self.vault_addr = msg.0;
-        async move { Ok(()) }.boxed_local()
+        let new_addr = msg.0;
+        info!("Setting current vault address to {}", new_addr);
+        self.vault_addr = new_addr.clone();
+
+        // Try to load token for the new vault address from database
+        if self.root_token.is_none() && self.db_manager.is_some() {
+            if let Some(db) = &self.db_manager {
+                match db.load_vault_credentials() {
+                    Ok(credentials) => {
+                        if !credentials.root_token.is_empty() {
+                            info!(
+                                "Loaded root token from database for vault {}",
+                                self.vault_addr
+                            );
+                            self.root_token = Some(credentials.root_token);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load credentials from database: {}", e);
+                    }
+                }
+            }
+        }
+
+        Box::pin(async move { Ok(()) })
     }
 }
 
@@ -1598,6 +1689,176 @@ impl Handler<SetRootToken> for VaultActor {
         debug!("Setting root token in VaultActor");
         self.root_token = Some(msg.0);
         Ok(())
+    }
+}
+
+// New message types for syncing tokens with the database
+pub struct SyncToken {
+    pub addr: String,
+    pub token: String,
+}
+
+impl Message for SyncToken {
+    type Result = Result<(), ActorError>;
+}
+
+impl Handler<SyncToken> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: SyncToken, _ctx: &mut Self::Context) -> Self::Result {
+        // Update this actor's token if the address matches
+        if self.vault_addr == msg.addr {
+            self.root_token = Some(msg.token.clone());
+        }
+
+        // Save to database if available
+        let token = msg.token.clone();
+        let db_manager = self.db_manager.clone();
+
+        Box::pin(async move {
+            if let Some(db) = db_manager {
+                // Try to load existing credentials first
+                let mut credentials = match db.load_vault_credentials() {
+                    Ok(creds) => {
+                        info!("Loaded existing credentials from database for token update");
+                        creds
+                    }
+                    Err(e) => {
+                        warn!("Failed to load credentials from database: {}. Creating new credentials.", e);
+                        VaultCredentials::default()
+                    }
+                };
+
+                // Update root token
+                credentials.root_token = token;
+                info!(
+                    "Updated root token in credentials (length: {})",
+                    credentials.root_token.len()
+                );
+
+                // Save back to database
+                if let Err(e) = db.save_vault_credentials(&credentials) {
+                    warn!("Failed to save root token to database: {}", e);
+                    return Err(ActorError::Operation(format!(
+                        "Failed to save root token: {}",
+                        e
+                    )));
+                }
+
+                info!("Successfully saved root token to database");
+            }
+            Ok(())
+        })
+    }
+}
+
+pub struct SyncTransitToken {
+    pub addr: String,
+    pub token: String,
+}
+
+impl Message for SyncTransitToken {
+    type Result = Result<(), ActorError>;
+}
+
+impl Handler<SyncTransitToken> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: SyncTransitToken, _ctx: &mut Self::Context) -> Self::Result {
+        // Note: We don't update the actor's state with transit token as it's not stored there
+        // Just save to database
+        let token = msg.token.clone();
+        let db_manager = self.db_manager.clone();
+
+        Box::pin(async move {
+            if let Some(db) = db_manager {
+                // Try to load existing credentials first
+                let mut credentials = match db.load_vault_credentials() {
+                    Ok(creds) => {
+                        info!("Loaded existing credentials from database for transit token update");
+                        creds
+                    }
+                    Err(e) => {
+                        warn!("Failed to load credentials from database: {}. Creating new credentials.", e);
+                        VaultCredentials::default()
+                    }
+                };
+
+                // Update transit token
+                credentials.transit_token = token;
+                info!(
+                    "Updated transit token in credentials (length: {})",
+                    credentials.transit_token.len()
+                );
+
+                // Save back to database
+                if let Err(e) = db.save_vault_credentials(&credentials) {
+                    warn!("Failed to save transit token to database: {}", e);
+                    return Err(ActorError::Operation(format!(
+                        "Failed to save transit token: {}",
+                        e
+                    )));
+                }
+
+                info!("Successfully saved transit token to database");
+            }
+            Ok(())
+        })
+    }
+}
+
+// Add SyncSubToken message
+pub struct SyncSubToken {
+    pub addr: String,
+    pub token: String,
+}
+
+impl Message for SyncSubToken {
+    type Result = Result<(), ActorError>;
+}
+
+impl Handler<SyncSubToken> for VaultActor {
+    type Result = ResponseFuture<Result<(), ActorError>>;
+
+    fn handle(&mut self, msg: SyncSubToken, _ctx: &mut Self::Context) -> Self::Result {
+        // Save sub token to database
+        let token = msg.token.clone();
+        let db_manager = self.db_manager.clone();
+
+        Box::pin(async move {
+            if let Some(db) = db_manager {
+                // Try to load existing credentials first
+                let mut credentials = match db.load_vault_credentials() {
+                    Ok(creds) => {
+                        info!("Loaded existing credentials from database for sub token update");
+                        creds
+                    }
+                    Err(e) => {
+                        warn!("Failed to load credentials from database: {}. Creating new credentials.", e);
+                        VaultCredentials::default()
+                    }
+                };
+
+                // Update sub token
+                credentials.sub_token = token;
+                info!(
+                    "Updated sub token in credentials (length: {})",
+                    credentials.sub_token.len()
+                );
+
+                // Save back to database
+                if let Err(e) = db.save_vault_credentials(&credentials) {
+                    warn!("Failed to save sub token to database: {}", e);
+                    return Err(ActorError::Operation(format!(
+                        "Failed to save sub token: {}",
+                        e
+                    )));
+                }
+
+                info!("Successfully saved sub token to database");
+            }
+            Ok(())
+        })
     }
 }
 

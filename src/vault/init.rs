@@ -3,6 +3,7 @@
 //! This module provides functions to initialize a new Vault server and
 //! unseal it for use.
 
+use crate::vault::status;
 use crate::vault::VaultError;
 use anyhow::{anyhow, Context, Result as AnyhowResult};
 use reqwest::Client;
@@ -214,7 +215,7 @@ pub async fn unseal_root_vault(addr: &str, keys: Vec<String>) -> AnyhowResult<Un
     let unseal_url = format!("{}/v1/sys/unseal", addr);
 
     // Check current seal status first
-    match super::status::get_vault_status(addr).await {
+    match status::get_vault_status(addr).await {
         Ok(status) => {
             if !status.sealed {
                 info!("Vault at {} is already unsealed", addr);
@@ -300,7 +301,7 @@ pub async fn initialize_vault(addr: &str) -> AnyhowResult<InitResult> {
     let init_url = format!("{}/v1/sys/init", addr);
 
     // Check if already initialized
-    match super::status::get_vault_status(addr).await {
+    match status::get_vault_status(addr).await {
         Ok(status) if status.initialized => {
             info!("Vault at {} is already initialized", addr);
             return Err(anyhow!("Vault is already initialized"));
@@ -340,4 +341,210 @@ pub async fn initialize_vault(addr: &str) -> AnyhowResult<InitResult> {
     );
 
     Ok(init_result)
+}
+
+/// Seals a Vault server.
+///
+/// # Arguments
+///
+/// * `addr` - The Vault server's URL.
+/// * `token` - The authentication token.
+///
+/// # Returns
+///
+/// A `Result` indicating success or containing a `VaultError` on failure.
+pub async fn seal_vault(addr: &str, token: &str) -> Result<(), VaultError> {
+    let client = Client::new();
+    let req_url = format!("{}/v1/sys/seal", addr);
+
+    let resp = client.post(&req_url).bearer_auth(token).send().await?;
+
+    if !resp.status().is_success() {
+        return Err(VaultError::ApiError(format!(
+            "Failed to seal Vault: {}",
+            resp.text().await?
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_logging;
+    use crate::vault::status::get_vault_status;
+    use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
+    use tracing::info;
+
+    #[tokio::test]
+    async fn test_init_and_unseal() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+
+        // Use a regular (non-dev) Vault instance for testing
+        let vault_container = setup_vault_container(VaultMode::Regular).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 30, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Test initialization with different shares and threshold values
+        let init_result = init_vault(
+            &vault_url, 3,    // secret_shares
+            2,    // secret_threshold
+            None, // recovery_shares
+            None, // recovery_threshold
+        )
+        .await?;
+
+        // Verify initialization result
+        assert!(
+            !init_result.keys.is_empty(),
+            "Should have generated unseal keys"
+        );
+        assert_eq!(init_result.keys.len(), 3, "Should have 3 unseal keys");
+        assert!(
+            !init_result.root_token.is_empty(),
+            "Should have generated a root token"
+        );
+
+        // Verify the vault is initialized but sealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(
+            status.initialized,
+            "Vault should be initialized after init operation"
+        );
+        assert!(
+            status.sealed,
+            "Vault should still be sealed after init operation"
+        );
+
+        // Test unsealing with insufficient keys
+        // Use only 1 key when threshold is 2
+        let partial_unseal_result = unseal_vault(&vault_url, &[init_result.keys[0].clone()]).await;
+        assert!(
+            partial_unseal_result.is_ok(),
+            "Failed to partially unseal vault"
+        );
+
+        // Vault should still be sealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(
+            status.sealed,
+            "Vault should still be sealed after providing only one key"
+        );
+
+        // Now provide the remaining key to reach the threshold
+        let full_unseal_result = unseal_vault(&vault_url, &[init_result.keys[1].clone()]).await;
+        assert!(full_unseal_result.is_ok(), "Failed to fully unseal vault");
+
+        // Verify vault is now unsealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(
+            !status.sealed,
+            "Vault should be unsealed after providing enough keys"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_init_with_invalid_params() -> Result<(), Box<dyn std::error::Error>> {
+        // Test with invalid parameters
+        let vault_addr = "http://127.0.0.1:8200";
+
+        // Try to initialize with invalid parameters (threshold > shares)
+        let init_result = init_vault(
+            vault_addr, 2, // secret_shares
+            3, // secret_threshold (invalid: threshold > shares)
+            None, None,
+        )
+        .await;
+
+        // This should fail
+        assert!(
+            init_result.is_err(),
+            "Should fail with invalid threshold > shares"
+        );
+
+        // Check for connection errors
+        let init_result = init_vault(
+            "http://127.0.0.1:9999", // Invalid address
+            1,
+            1,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(init_result.is_err(), "Should fail with connection error");
+
+        Ok(())
+    }
+
+    /// Tests that initialization fails on a development mode Vault instance.
+    /// Dev mode Vaults are pre-initialized and unsealed, so this test confirms that
+    /// our init function properly detects this condition and returns an error.
+    #[tokio::test]
+    async fn test_vault_init_and_unseal_dev_mode() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::init_logging;
+        use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
+        use tracing::info;
+
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        // Give the container more time to fully start up and be ready
+        info!("Waiting for Vault dev container to start up...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        // Increase retries and timeout for container readiness
+        wait_for_vault_ready(&vault_url, 20, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Dev mode vaults are already initialized, so this should fail
+        assert!(init_vault(&vault_url, 1, 1, None, None).await.is_err());
+
+        Ok(())
+    }
+
+    /// Tests full Vault initialization and unsealing with a regular (non-dev) Vault container.
+    /// This validates the complete initialization and unsealing workflow in a realistic setup.
+    #[tokio::test]
+    async fn test_full_vault_setup() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Regular).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        // Increase retries and timeout for container readiness
+        wait_for_vault_ready(&vault_url, 30, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let init_res = init_vault(&vault_url, 1, 1, None, None).await?;
+        assert!(!init_res.root_token.is_empty());
+        info!("Vault initialized with root token: {}", init_res.root_token);
+        info!("Unsealing Vault with keys: {:?}", init_res.keys);
+
+        unseal_vault(&vault_url, &init_res.keys).await?;
+        info!("Vault unsealed successfully");
+
+        // Verify the vault is unsealed
+        let status = status::get_vault_status(&vault_url).await?;
+        assert!(
+            !status.sealed,
+            "Vault should be unsealed after unseal operation"
+        );
+
+        Ok(())
+    }
 }

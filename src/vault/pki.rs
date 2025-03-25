@@ -354,7 +354,7 @@ pub async fn setup_pki(
 ///
 /// # Returns
 /// A tuple containing the full certificate chain and the private key.
-pub async fn issue_certificateificate(
+pub async fn issue_certificate(
     addr: &str,
     token: &str,
     role_name: &str,
@@ -414,4 +414,190 @@ pub async fn issue_certificateificate(
         .to_string();
 
     Ok((full_chain, issued_key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_logging;
+    use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
+    use tracing::{error, info};
+
+    /// Tests the basic PKI setup functionality using a dev Vault instance.
+    /// This verifies that we can successfully:
+    /// - Connect to a Vault instance
+    /// - Create a root PKI
+    /// - Generate a CA certificate
+    /// - Create a role for domain certificate issuance
+    #[tokio::test]
+    async fn test_setup_pki() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 10, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let domain = "example.com";
+        let ttl = "8760h";
+        let (cert, role_name) =
+            setup_pki(&vault_url, "root", domain, ttl, false, None, None).await?;
+
+        info!("CA Certificate:\n{}", cert);
+        info!("PKI role name: {}", role_name);
+
+        assert!(cert.contains("BEGIN CERTIFICATE"));
+        assert_eq!(role_name, domain.replace('.', "-"));
+
+        Ok(())
+    }
+
+    /// Tests setting up both a root PKI and an intermediate PKI certificate authority
+    /// within the same Vault instance. This verifies:
+    /// - Creation of a root PKI engine
+    /// - Creation of an intermediate PKI engine
+    /// - Proper signing of the intermediate certificate by the root CA
+    /// - Creation of proper certificate chaining
+    #[tokio::test]
+    async fn test_setup_pki_same_vault_intermediate() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 10, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let domain = "example.com";
+        let ttl = "8760h";
+        let (cert_chain, role_name) =
+            setup_pki(&vault_url, "root", domain, ttl, true, None, None).await?;
+
+        info!("CA Certificate Chain:\n{}", cert_chain);
+        info!("PKI role name: {}", role_name);
+
+        assert!(cert_chain.contains("BEGIN CERTIFICATE"));
+        let cert_count = cert_chain.matches("BEGIN CERTIFICATE").count();
+        assert!(cert_count >= 2, "Expected at least 2 certificates in chain");
+        assert_eq!(role_name, domain.replace('.', "-"));
+
+        Ok(())
+    }
+
+    /// Tests setting up a PKI infrastructure spanning two separate Vault instances where:
+    /// - One Vault instance acts as the root Certificate Authority
+    /// - A second Vault instance acts as an intermediate Certificate Authority
+    /// - The intermediate CA certificate is signed by the root CA
+    /// This validates cross-Vault PKI hierarchy setup and certificate chaining.
+    #[tokio::test]
+    async fn test_setup_pki_secondary_vault_intermediate() -> Result<(), Box<dyn std::error::Error>>
+    {
+        init_logging();
+
+        // Set up root vault
+        let root_container = setup_vault_container(VaultMode::Regular).await;
+        let root_host = root_container.get_host().await.unwrap();
+        let root_port = root_container.get_host_port_ipv4(8200).await.unwrap();
+        let root_url = format!("http://{}:{}", root_host, root_port);
+
+        // Set up intermediate vault
+        let intermediate_container = setup_vault_container(VaultMode::Regular).await;
+        let intermediate_host = intermediate_container.get_host().await.unwrap();
+        let intermediate_port = intermediate_container
+            .get_host_port_ipv4(8200)
+            .await
+            .unwrap();
+        let intermediate_url = format!("http://{}:{}", intermediate_host, intermediate_port);
+
+        // Wait for both vaults to be ready
+        wait_for_vault_ready(&root_url, 30, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+        wait_for_vault_ready(&intermediate_url, 30, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Initialize both vaults
+        let root_init = init_vault(&root_url, 1, 1, None, None).await?;
+        let intermediate_init = init_vault(&intermediate_url, 1, 1, None, None).await?;
+
+        // Unseal both vaults
+        unseal_vault(&root_url, &root_init.keys).await?;
+        unseal_vault(&intermediate_url, &intermediate_init.keys).await?;
+
+        // Set up PKI on root vault
+        let role_name = "example-com";
+        setup_pki(
+            &root_url,
+            &root_init.root_token,
+            "example.com",
+            "8760h",
+            false,
+            None,
+            None,
+        )
+        .await?;
+
+        // Set up PKI on intermediate vault
+        setup_pki(
+            &intermediate_url,
+            &intermediate_init.root_token,
+            "example.com",
+            "8760h",
+            true,
+            Some(&root_url),
+            Some(&root_init.root_token),
+        )
+        .await?;
+
+        // Issue a certificate from the intermediate vault
+        let cert_result = issue_certificate(
+            &intermediate_url,
+            &intermediate_init.root_token,
+            role_name,
+            "test.example.com",
+            Some("1h"),
+        )
+        .await?;
+
+        assert!(!cert_result.certificate.is_empty());
+        assert!(!cert_result.private_key.is_empty());
+
+        Ok(())
+    }
+
+    /// Tests the certificate issuance from a PKI role
+    #[tokio::test]
+    async fn test_issue_certificate() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 10, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Setup PKI with a role that allows example.com domain
+        let domain = "example.com";
+        let ttl = "8760h";
+        let (ca_cert, role_name) =
+            setup_pki(&vault_url, "root", domain, ttl, false, None, None).await?;
+        info!("CA Certificate:\n{}", ca_cert);
+
+        // Issue a certificate with a valid common name
+        let common_name = "test.example.com";
+        let (cert, key) =
+            issue_certificate(&vault_url, "root", &role_name, common_name, Some("1h")).await?;
+        assert!(!cert.is_empty(), "Certificate should not be empty");
+        assert!(!key.is_empty(), "Private key should not be empty");
+
+        Ok(())
+    }
 }

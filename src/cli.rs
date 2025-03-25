@@ -1,3 +1,12 @@
+//! CLI module for the Merka Vault library
+//!
+//! This module implements the command-line interface for the Merka Vault library.
+//! It can use both the actor-based API (preferred) and the direct vault API.
+//!
+//! Architectural constraints:
+//! - The CLI module may use both the actor and vault modules
+//! - The CLI module should prefer using the actor for stateful operations
+
 use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
@@ -116,6 +125,21 @@ pub enum Commands {
         /// Transit key name
         #[arg(long, default_value = "autounseal-key")]
         key_name: String,
+    },
+
+    /// Start the web server with API endpoints for vault management
+    Server {
+        /// The address to listen on
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        listen_addr: String,
+
+        /// The default vault address
+        #[arg(long, default_value = "http://127.0.0.1:8200")]
+        vault_addr: String,
+
+        /// Path to the SQLite database
+        #[arg(long, default_value = "merka_vault.db")]
+        db_path: String,
     },
 }
 
@@ -254,6 +278,10 @@ impl VaultInterface for VaultCli {
 // -------------------------------------------------------------------
 // The main CLI runner that processes commands
 // -------------------------------------------------------------------
+/// Run the CLI application
+///
+/// This function implements the CLI logic, using either the actor-based API
+/// or the direct vault API depending on the operation being performed.
 pub async fn run_cli() -> Result<()> {
     // Parse CLI args
     let cli = Cli::parse();
@@ -416,6 +444,19 @@ pub async fn run_cli() -> Result<()> {
                     println!("  Sub vault: Not detected at {}", sub_addr);
                 }
             }
+        }
+
+        Commands::Server {
+            listen_addr,
+            vault_addr,
+            db_path,
+        } => {
+            println!("Starting the web server on {}...", listen_addr);
+            println!("Using vault at: {}", vault_addr);
+            println!("Database path: {}", db_path);
+
+            // Run the server (this is a blocking call)
+            crate::server::start_server(&listen_addr, &vault_addr, &db_path).await?;
         }
     }
 

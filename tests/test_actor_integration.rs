@@ -1,4 +1,4 @@
-//! tests/actor_integration.rs
+//! tests/test_actor_integration.rs
 
 mod common;
 use actix_rt::time::timeout;

@@ -9,6 +9,11 @@ documentation = "https://docs.rs/merka-vault"
 keywords = ["vault", "pki", "hashicorp-vault", "merka", "cli"]
 categories = ["api-bindings", "command-line-utilities"]
 
+# Define features for the crate
+[features]
+# Default features when nothing is specified
+default = []
+
 [dependencies]
 actix = "0.13.5"
 actix-rt = "2.10.0"
@@ -29,6 +34,7 @@ async-trait = "0.1.88"
 log = "0.4.26"
 uuid = { version = "1.16.0", features = ["v4"] }
 base64 = "0.22.1"
+env_logger = "0.11.7"
 
 # SQLite dependencies
 rusqlite = { version = "0.29.0", features = ["bundled"] }

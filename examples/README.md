@@ -181,12 +181,40 @@ If the test client cannot connect to the web server:
 
 ## Integration Testing
 
-The examples can also be used for integration testing. See `tests/example_test.rs` for an example of how to use the web server and test client together as an integration test.
+The examples can also be used for integration testing:
+
+1. `tests/example_test.rs` - Integration test for the web server and test client
+2. `tests/test_integration.rs` - Comprehensive tests that mirror the functionality of the examples
+
+### Example Test
+
+The `example_test.rs` file demonstrates how to use the web server and test client together as an integration test.
 
 To run the integration test:
 
-```
+```bash
 cargo test --test example_test -- --ignored
 ```
 
 Note: The test is marked as `#[ignore]` by default since it requires the Docker Compose Vault instances to be running.
+
+### Database-Backed Integration Tests
+
+The `test_integration.rs` file contains more comprehensive tests:
+
+- `test_database_operations` - Tests SQLite database operations
+- `test_vault_setup_flow` - Tests the complete vault setup flow
+
+These tests are designed to validate the functionality demonstrated in the examples but in a proper testing framework.
+
+To run these tests:
+
+```bash
+# Start the web server first
+cargo run -- server
+
+# Run the vault setup flow test
+cargo test -p merka-vault test_vault_setup_flow -- --nocapture
+```
+
+For more details on testing, see the [Testing Guide](../docs/testing.md).

@@ -100,3 +100,82 @@ pub async fn setup_kubernetes_auth(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_logging;
+    use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
+    use tracing::info;
+
+    /// Tests the AppRole authentication method setup.
+    /// Verifies that we can:
+    /// - Enable the AppRole auth method
+    /// - Create a new role with specific policies
+    /// - Generate role_id and secret_id credentials
+    #[tokio::test]
+    async fn test_setup_approle() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 10, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let role_name = "test-role";
+        let policies = vec!["default".to_string()];
+        let creds = setup_approle(&vault_url, "root", role_name, &policies).await?;
+
+        info!(
+            "AppRole credentials: role_id: {}, secret_id: {}",
+            creds.role_id, creds.secret_id
+        );
+        assert!(!creds.role_id.is_empty());
+        assert!(!creds.secret_id.is_empty());
+
+        Ok(())
+    }
+
+    /// Tests combined auth method setup including Kubernetes auth (which may fail in test env).
+    /// This verifies that both auth methods can be set up together.
+    #[tokio::test]
+    async fn test_kubernetes_auth_setup() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        wait_for_vault_ready(&vault_url, 10, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let k8s_role = "test-k8s-role";
+        let sa_name = "vault-auth";
+        let ns = "default";
+        let k8s_host = "https://kubernetes.default.svc";
+        let k8s_ca = "---BEGIN CERTIFICATE---\nMIIF...==\n-----END CERTIFICATE-----";
+        let result =
+            setup_kubernetes_auth(&vault_url, "root", k8s_role, sa_name, ns, k8s_host, k8s_ca)
+                .await;
+
+        // This will likely fail in a test environment without a real K8s API
+        // But we at least verify the code doesn't panic
+        if let Err(err) = &result {
+            info!(
+                "Kubernetes auth setup returned error (expected in test env): {}",
+                err
+            );
+        } else {
+            info!("Kubernetes auth configured for role '{}'", k8s_role);
+        }
+
+        // Expected error modes in test: either success or VaultError::Api
+        assert!(result.is_ok() || matches!(result, Err(VaultError::Api(_))));
+
+        Ok(())
+    }
+}

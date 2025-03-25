@@ -47,6 +47,8 @@
 //! # }
 //! ```
 
+use crate::vault::init::seal_vault;
+use crate::vault::status::get_vault_status;
 use crate::vault::{init::InitResult, VaultClient, VaultError};
 use serde_json::json;
 use tokio;
@@ -488,4 +490,115 @@ pub async fn regenerate_transit_unseal_token(
     tracing::info!("2. Restart your target Vault server");
 
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_logging;
+    use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
+    use tracing::info;
+
+    /// Tests the complete auto-unseal workflow:
+    /// - Sets up an "unsealer" Vault in dev mode
+    /// - Configures a target Vault to use transit auto-unseal
+    /// - Initializes the target Vault with auto-unseal
+    /// - Verifies the target Vault has recovery keys instead of unseal keys
+    /// Tests the end-to-end auto-unsealing initialization process.
+    #[tokio::test]
+    async fn test_autounseal_workflow() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Regular).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        // Increase retries and timeout for container readiness
+        wait_for_vault_ready(&vault_url, 20, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Initialize vault with recovery keys
+        let init_result = init_with_autounseal(&vault_url).await?;
+
+        // Configure auto-unseal
+        let key_name = "autounseal-key";
+        configure_vault_for_autounseal(&vault_url, &vault_url, &init_result.root_token, key_name)
+            .await?;
+
+        // Seal the vault
+        seal_vault(&vault_url, &init_result.root_token).await?;
+
+        // Verify vault is sealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(status.sealed, "Vault should be sealed");
+
+        // Wait for auto-unseal to complete
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        // Verify vault is unsealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(!status.sealed, "Vault should be auto-unsealed");
+
+        Ok(())
+    }
+
+    /// Tests the auto-unseal workflow using a response-wrapped token:
+    /// - Sets up a Vault instance with transit engine enabled
+    /// - Creates an encryption key for auto-unseal
+    /// - Sets up appropriate policies for auto-unseal operations
+    /// - Creates a response-wrapped token with the auto-unseal policy
+    /// - Unwraps the token and uses it for auto-unseal operations
+    /// This validates the secure token distribution workflow for auto-unseal.
+    #[tokio::test]
+    async fn test_wrapped_token_autounseal() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let vault_container = setup_vault_container(VaultMode::Regular).await;
+        let host = vault_container.get_host().await.unwrap();
+        let host_port = vault_container.get_host_port_ipv4(8200).await.unwrap();
+        let vault_url = format!("http://{}:{}", host, host_port);
+
+        // Increase retries and timeout for container readiness
+        wait_for_vault_ready(&vault_url, 30, 1000)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Initialize vault with recovery keys
+        let init_result = init_with_autounseal(&vault_url).await?;
+
+        // Configure auto-unseal
+        let key_name = "autounseal-key";
+        configure_vault_for_autounseal(&vault_url, &vault_url, &init_result.root_token, key_name)
+            .await?;
+
+        // Generate wrapped token
+        let wrapped_token = generate_wrapped_transit_unseal_token(
+            &vault_url,
+            &init_result.root_token,
+            key_name,
+            3600, // 1 hour in seconds
+        )
+        .await?;
+
+        // Seal the vault
+        seal_vault(&vault_url, &init_result.root_token).await?;
+
+        // Verify vault is sealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(status.sealed, "Vault should be sealed");
+
+        // Unwrap the token and use it for auto-unseal
+        let unwrapped_token = unwrap_token(&vault_url, &wrapped_token).await?;
+        configure_vault_for_autounseal_with_token(&vault_url, &unwrapped_token, "root", key_name)
+            .await?;
+
+        // Wait for auto-unseal to complete
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        // Verify vault is unsealed
+        let status = get_vault_status(&vault_url).await?;
+        assert!(!status.sealed, "Vault should be auto-unsealed");
+
+        Ok(())
+    }
 }

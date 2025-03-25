@@ -1,5 +1,10 @@
-//! This module provides common utilities for setting up Vault and Caddy containers
-//! for integration testing.
+/// Common testing utilities module
+///
+/// This module provides common utilities for setting up Vault and Caddy containers
+/// for integration testing.
+
+/// Actor utility functions for tests
+pub mod actor_utils;
 
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{

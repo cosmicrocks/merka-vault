@@ -52,3 +52,32 @@ pub async fn get_vault_status(addr: &str) -> Result<VaultStatus, VaultError> {
 
     Ok(status)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_logging;
+
+    #[tokio::test]
+    async fn test_get_vault_status_connection_error() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let result = get_vault_status("http://127.0.0.1:9999").await;
+        assert!(result.is_err(), "Should fail with connection error");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("error sending request"),
+            "Error should be connection-related"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_vault_status_with_real_vault() -> Result<(), Box<dyn std::error::Error>> {
+        init_logging();
+        let status = get_vault_status("http://127.0.0.1:8200").await?;
+        assert!(status.initialized, "Vault should be initialized");
+        assert!(!status.sealed, "Vault should not be sealed");
+        Ok(())
+    }
+}
