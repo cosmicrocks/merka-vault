@@ -52,7 +52,7 @@ async fn test_auto_unseal_with_unwrapped_token() -> Result<(), Box<dyn std::erro
         secret_threshold: 1,
     };
 
-    let _ = match unsealer_addr.send(init_msg).await {
+    match unsealer_addr.send(init_msg).await {
         Ok(result) => match result {
             Ok(_) => {
                 info!("Actor successfully processed InitVault message");

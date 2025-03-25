@@ -367,19 +367,16 @@ impl VaultActor {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/sys/seal-status", addr);
 
-        match client.get(&url).send().await {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    // Parse the response to check seal type
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(seal_type) = json.get("type") {
-                            // If seal type is "transit", this is an auto-unsealed vault
-                            return seal_type.as_str().unwrap_or("").contains("transit");
-                        }
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                // Parse the response to check seal type
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(seal_type) = json.get("type") {
+                        // If seal type is "transit", this is an auto-unsealed vault
+                        return seal_type.as_str().unwrap_or("").contains("transit");
                     }
                 }
             }
-            Err(_) => {}
         }
 
         false
@@ -396,21 +393,18 @@ impl VaultActor {
         // In this example, we'll fall back to checking the config if accessible,
         // or infer from seal type and relationships we observe
 
-        match client.get(&url).send().await {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(seal) = json.get("seal") {
-                            if let Some(config) = seal.get("config") {
-                                if let Some(address) = config.get("address") {
-                                    return address.as_str().map(|s| s.to_string());
-                                }
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(seal) = json.get("seal") {
+                        if let Some(config) = seal.get("config") {
+                            if let Some(address) = config.get("address") {
+                                return address.as_str().map(|s| s.to_string());
                             }
                         }
                     }
                 }
             }
-            Err(_) => {}
         }
 
         // If we couldn't get the config, check if we've already tracked this relationship elsewhere
