@@ -52,6 +52,9 @@ mod tests {
             // Terminate test client if it's still running
             if client_status.is_none() {
                 test_client.kill().expect("Failed to kill test client");
+                test_client
+                    .wait()
+                    .expect("Failed to wait for test client to exit");
             }
 
             // Return success if client didn't exit with an error
@@ -60,6 +63,9 @@ mod tests {
 
         // Terminate web server
         web_server.kill().expect("Failed to kill web server");
+        web_server
+            .wait()
+            .expect("Failed to wait for web server to exit");
 
         // Check if the test was successful
         assert!(result, "Example test failed");

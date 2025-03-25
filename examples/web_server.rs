@@ -782,13 +782,8 @@ async fn main() -> std::io::Result<()> {
     let event_tx_clone = event_tx.clone();
     tokio::spawn(async move {
         let mut rx = event_rx;
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    let _ = event_tx_clone.send(event);
-                }
-                Err(_) => break,
-            }
+        while let Ok(event) = rx.recv().await {
+            let _ = event_tx_clone.send(event);
         }
     });
 
