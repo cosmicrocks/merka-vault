@@ -1509,6 +1509,21 @@ impl Handler<SealVault> for VaultActor {
     }
 }
 
+// Add new message type for setting the root token directly
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), ActorError>")]
+pub struct SetRootToken(pub String);
+
+impl Handler<SetRootToken> for VaultActor {
+    type Result = Result<(), ActorError>;
+
+    fn handle(&mut self, msg: SetRootToken, _ctx: &mut Context<Self>) -> Self::Result {
+        debug!("Setting root token in VaultActor");
+        self.root_token = Some(msg.0);
+        Ok(())
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Start the actor with a broadcast channel
 // -----------------------------------------------------------------------------

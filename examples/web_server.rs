@@ -40,8 +40,8 @@ use futures_util::stream::StreamExt;
 use log::{debug, error, info, warn};
 use merka_vault::actor::{
     AddUnsealerRelationship, AutoUnseal, CheckDependencies, CheckStatus, GetCurrentAddress,
-    GetUnwrappedTransitToken, InitVault, SetCurrentAddress, SetupPki, SetupTransit, UnsealVault,
-    VaultActor, VaultEvent,
+    GetUnwrappedTransitToken, InitVault, SetCurrentAddress, SetRootToken, SetupPki, SetupTransit,
+    UnsealVault, VaultActor, VaultEvent,
 };
 use serde::{Deserialize, Serialize};
 use socketioxide::{extract::SocketRef, socket::DisconnectReason, SocketIo};
@@ -628,18 +628,12 @@ async fn setup_sub_vault(
     let sub_token = auto_unseal_result.root_token.clone();
 
     // STEP 2: Setup PKI using the actor's SetupPki message with the sub vault token
-    // First, we need to set the root token in the actor to the sub vault token
-    if let Err(e) = state
-        .actor
-        .send(UnsealVault {
-            keys: vec![sub_token.clone()],
-        })
-        .await
-    {
+    // First, explicitly set the root token in the actor to the sub vault token
+    if let Err(e) = state.actor.send(SetRootToken(sub_token.clone())).await {
         return HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
-            error: Some(format!("Failed to unseal sub vault: {}", e)),
+            error: Some(format!("Failed to set token for sub vault: {}", e)),
         });
     }
 
