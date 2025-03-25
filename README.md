@@ -65,11 +65,14 @@ let pki_result = actor.send(SetupPki {
 The project includes a complete web server implementation with REST API and WebSocket events.
 
 ```bash
+# Start the vaults
+docker compose up -d
+
 # Run the web server
 cargo run --example web_server
 
 # Run the test client
-cargo run --example test_client
+cargo run --example test_client -- --restart-sub-vault
 ```
 
 For more details, see the [Examples Documentation](./docs/examples.md).
