@@ -15,7 +15,6 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Error as SQLiteError, Result as SQLiteResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 /// The VaultCredentials struct represents stored vault credentials

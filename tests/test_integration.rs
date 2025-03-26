@@ -1,11 +1,8 @@
 use actix::Actor;
-use log::{error, info, warn};
+use log::info;
 use merka_vault::database::{DatabaseManager, VaultCredentials};
-use reqwest::Client;
 use serde_json::{json, Value};
 use serial_test::serial;
-use std::io;
-use tokio::time::Duration;
 
 mod database_utils;
 mod test_utils;

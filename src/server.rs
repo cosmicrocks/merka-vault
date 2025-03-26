@@ -2,9 +2,8 @@ use actix::*;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use env_logger::Env;
 use futures_util::stream::StreamExt;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use socketioxide::{extract::SocketRef, socket::DisconnectReason, SocketIo};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -12,13 +11,12 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::actor::{
-    AddUnsealerRelationship, AutoUnseal, CheckDependencies, CheckStatus, GenerateWrappedToken,
-    GetCurrentAddress, GetUnwrappedTransitToken, InitVault, RegisterVault, SealVault,
-    SetCurrentAddress, SetRootToken, SetupPki, SetupRoot, SetupSub, SetupTransit, SyncSubToken,
-    SyncToken, SyncTransitToken, UnsealVault, UnwrapToken, VaultActor, VaultEvent,
-    VerifyTokenPermissions,
+    AddUnsealerRelationship, CheckDependencies, CheckStatus,
+    GetCurrentAddress, GetUnwrappedTransitToken, RegisterVault,
+    SetCurrentAddress, SetRootToken, SetupRoot, SetupSub, SyncSubToken,
+    SyncToken, SyncTransitToken, UnsealVault, VaultActor, VaultEvent,
 };
-use crate::database::{DatabaseManager, VaultCredentials};
+use crate::database::DatabaseManager;
 
 // Request and Response structs
 #[derive(Deserialize)]
@@ -347,40 +345,37 @@ async fn setup_root_vault(
         .await;
 
     // Check root token and store it
-    match &setup_result {
-        Ok(Ok(unwrapped_token)) => {
-            // Check if the actor has a root token
-            match state.actor.send(CheckStatus).await {
-                Ok(Ok(status)) => {
-                    if status.initialized && !status.sealed {
-                        // Use SyncToken and SyncTransitToken messages to store tokens via actor
-                        if let Some(root_token) = &req.token {
-                            if !root_token.is_empty() {
-                                let _ = state
-                                    .actor
-                                    .send(SyncToken {
-                                        addr: req.root_addr.clone(),
-                                        token: root_token.clone(),
-                                    })
-                                    .await;
-                            }
+    if let Ok(Ok(unwrapped_token)) = &setup_result {
+        // Check if the actor has a root token
+        match state.actor.send(CheckStatus).await {
+            Ok(Ok(status)) => {
+                if status.initialized && !status.sealed {
+                    // Use SyncToken and SyncTransitToken messages to store tokens via actor
+                    if let Some(root_token) = &req.token {
+                        if !root_token.is_empty() {
+                            let _ = state
+                                .actor
+                                .send(SyncToken {
+                                    addr: req.root_addr.clone(),
+                                    token: root_token.clone(),
+                                })
+                                .await;
                         }
-
-                        let _ = state
-                            .actor
-                            .send(SyncTransitToken {
-                                addr: req.root_addr.clone(),
-                                token: unwrapped_token.clone(),
-                            })
-                            .await;
                     }
-                }
-                _ => {
-                    warn!("Unable to check vault status after setup to retrieve token");
+
+                    let _ = state
+                        .actor
+                        .send(SyncTransitToken {
+                            addr: req.root_addr.clone(),
+                            token: unwrapped_token.clone(),
+                        })
+                        .await;
                 }
             }
+            _ => {
+                warn!("Unable to check vault status after setup to retrieve token");
+            }
         }
-        _ => {}
     }
 
     // Restore the original address
@@ -401,7 +396,7 @@ async fn setup_root_vault(
                 // Include the token if it was provided
                 (
                     "root_token",
-                    req.token.clone().unwrap_or_else(|| "".to_string()),
+                    req.token.clone().unwrap_or_default(),
                 ),
             ]);
 
@@ -464,18 +459,15 @@ async fn setup_sub_vault(
         .await;
 
     // Get token and store it
-    match &setup_result {
-        Ok(Ok(sub_token)) => {
-            // Use a new actor message to store sub token
-            let _ = state
-                .actor
-                .send(SyncSubToken {
-                    addr: req.sub_addr.clone(),
-                    token: sub_token.clone(),
-                })
-                .await;
-        }
-        _ => {}
+    if let Ok(Ok(sub_token)) = &setup_result {
+        // Use a new actor message to store sub token
+        let _ = state
+            .actor
+            .send(SyncSubToken {
+                addr: req.sub_addr.clone(),
+                token: sub_token.clone(),
+            })
+            .await;
     }
 
     // Register the sub vault for monitoring
@@ -548,25 +540,22 @@ async fn get_transit_token(
         .await;
 
     // Store the token
-    match &token_result {
-        Ok(Ok(transit_token)) => {
-            info!("Successfully unwrapped transit token for auto-unseal");
+    if let Ok(Ok(transit_token)) = &token_result {
+        info!("Successfully unwrapped transit token for auto-unseal");
 
-            // Sync the transit token with the actor instead of direct database operations
-            match state
-                .actor
-                .send(SyncTransitToken {
-                    addr: req.root_addr.clone(),
-                    token: transit_token.clone(),
-                })
-                .await
-            {
-                Ok(Ok(_)) => info!("Successfully synced transit token with actor"),
-                Ok(Err(e)) => warn!("Failed to sync transit token with actor: {}", e),
-                Err(e) => warn!("Failed to send sync transit token message to actor: {}", e),
-            }
+        // Sync the transit token with the actor instead of direct database operations
+        match state
+            .actor
+            .send(SyncTransitToken {
+                addr: req.root_addr.clone(),
+                token: transit_token.clone(),
+            })
+            .await
+        {
+            Ok(Ok(_)) => info!("Successfully synced transit token with actor"),
+            Ok(Err(e)) => warn!("Failed to sync transit token with actor: {}", e),
+            Err(e) => warn!("Failed to send sync transit token message to actor: {}", e),
         }
-        _ => {}
     }
 
     // Restore the original address

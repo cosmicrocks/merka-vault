@@ -1,9 +1,5 @@
 use log::info;
 use serial_test::serial;
-use std::process::{Child, Command};
-use std::thread;
-use std::time::Duration;
-use tokio::runtime::Runtime;
 
 mod test_utils;
 use test_utils::{setup_logging, DockerComposeEnv};

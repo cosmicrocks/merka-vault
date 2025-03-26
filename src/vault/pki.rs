@@ -450,7 +450,7 @@ mod tests {
     use super::*;
     use crate::init_logging;
     use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
-    use tracing::{error, info};
+    use tracing::info;
 
     /// Tests the basic PKI setup functionality using a dev Vault instance.
     /// This verifies that we can successfully:

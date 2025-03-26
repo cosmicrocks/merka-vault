@@ -1,12 +1,8 @@
 use actix::Actor;
-use log::{error, info, warn};
-use merka_vault::database::{DatabaseManager, VaultCredentials};
+use log::info;
+use merka_vault::database::VaultCredentials;
 use reqwest::Client;
-use serde_json::{json, Value};
 use serial_test::serial;
-use std::io;
-use std::{env, process::Command};
-use tokio::time::Duration;
 
 mod database_utils;
 mod test_utils;
@@ -127,7 +123,7 @@ async fn test_minimal_vault_integration() {
     let client = Client::new();
     let root_vault_url = "http://127.0.0.1:8200";
     let response = client
-        .get(&format!("{}/v1/sys/health", root_vault_url))
+        .get(format!("{}/v1/sys/health", root_vault_url))
         .send()
         .await;
 

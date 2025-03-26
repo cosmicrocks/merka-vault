@@ -16,20 +16,22 @@ pub fn setup_logging() {
 /// Checks if the server is already running
 pub async fn is_server_running() -> bool {
     // Attempt to connect to the server's status endpoint
-    match reqwest::Client::new()
+    reqwest::Client::new()
         .get("http://localhost:8080/api/status")
         .send()
-        .await
-    {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+        .await.is_ok()
 }
 
 /// A struct to handle the docker-compose environment
 pub struct DockerComposeEnv {
     pub up_succeeded: bool,
     pub start_attempted: bool,
+}
+
+impl Default for DockerComposeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DockerComposeEnv {

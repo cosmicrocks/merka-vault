@@ -285,10 +285,10 @@ pub async fn generate_wrapped_transit_token(
 mod tests {
     use super::*;
     use crate::init_logging;
-    use crate::vault::init::unseal_vault;
+    
     use crate::vault::status::get_vault_status;
     use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
-    use tokio::time::Duration;
+    
     use tracing::info;
 
     // Test for transit engine setup error handling with invalid token
@@ -356,20 +356,19 @@ mod tests {
 
         // 1. Test setting up transit engine
         info!("Setting up transit engine");
-        let _setup_result = setup_transit_engine(&vault_url, &root_token).await?;
+        setup_transit_engine(&vault_url, &root_token).await?;
         info!("Transit engine setup successful");
 
         // 2. Test creating transit key
         let key_name = "test-key";
         info!("Creating transit key: {}", key_name);
-        let _create_key_result = create_transit_key(&vault_url, &root_token, key_name).await?;
+        create_transit_key(&vault_url, &root_token, key_name).await?;
         info!("Created transit key: {}", key_name);
 
         // 3. Test creating transit policy
         let policy_name = "test-policy";
         info!("Creating transit policy: {}", policy_name);
-        let _create_policy_result =
-            create_transit_unseal_policy(&vault_url, &root_token, policy_name, key_name).await?;
+        create_transit_unseal_policy(&vault_url, &root_token, policy_name, key_name).await?;
 
         // 4. Test generating transit token
         info!("Generating transit token");

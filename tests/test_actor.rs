@@ -1,6 +1,6 @@
 use anyhow::Result;
 use log::{error, info};
-use merka_vault::actor::{VaultActor, VaultEvent};
+use merka_vault::actor::VaultEvent;
 use serial_test::serial;
 use tokio::time::Duration;
 
@@ -43,7 +43,7 @@ async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::er
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, mut rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
 
         // Step 1: Initialize the vault
         let (root_token, keys) = match actor_utils::initialize_vault(&actor, 1, 1).await {
@@ -142,7 +142,7 @@ async fn test_actor_events() -> Result<(), Box<dyn std::error::Error>> {
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, mut rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
 
         // Start a background task to monitor events
         let mut rx_clone = rx.resubscribe();
@@ -255,7 +255,7 @@ async fn test_setup_root_with_actor() -> Result<(), Box<dyn std::error::Error>> 
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, mut rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
 
         // Set up the root vault
         let key_name = "auto-unseal-key";
@@ -355,7 +355,7 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     VaultEvent::StatusChecked {
                         initialized,
-                        sealed,
+                        
                         ..
                     } if *initialized => {
                         // If we get a status check and it's initialized, use dummy values
@@ -442,7 +442,7 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, mut rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
 
         // Initialize the vault first
         info!("Initializing vault for PKI test");
@@ -559,7 +559,7 @@ async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
         let sub_addr = "http://127.0.0.1:8200"; // Same as root for testing
 
         // Create actors for root and sub vaults
-        let (root_actor, mut root_rx) = actor_utils::create_actor(root_addr, None);
+        let (root_actor, root_rx) = actor_utils::create_actor(root_addr, None);
 
         // Initialize the vault first
         info!("Initializing vault for auto-unseal test");

@@ -34,15 +34,11 @@ pub mod transit;
 pub mod wizard;
 
 // Re-export key types and traits for convenience
-pub use auth::*;
 pub use client::VaultClient;
-pub use common::VaultStatus;
 pub use error::VaultError;
-pub use init::{init_vault, unseal_root_vault, InitResult, UnsealResult};
-pub use operations::VaultOperations;
+pub use init::{InitResult, UnsealResult};
 pub use pki::PkiResult;
 pub use seal::seal_vault;
-pub use wizard::{run_setup_wizard, WizardConfig, WizardResult};
 
 use serde::{Deserialize, Serialize};
 
