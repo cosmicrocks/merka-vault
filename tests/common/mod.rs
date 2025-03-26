@@ -15,14 +15,14 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 // Global storage for test name access
-#[allow(dead_code)]
+#[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
 static CURRENT_TEST_NAME: OnceLock<String> = OnceLock::new();
 // Track if we've initialized logging
-#[allow(dead_code)]
+#[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
 static INIT_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
 
 /// Set up logging for tests with current test name in each log line
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub fn init_logging() {
     // Ensure we only initialize once
     let init_done = INIT_DONE.get_or_init(|| Mutex::new(false));
@@ -93,7 +93,7 @@ pub enum VaultMode {
 }
 
 // Helper function to create a base Vault container
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 fn create_base_vault_container() -> testcontainers::core::ContainerRequest<GenericImage> {
     GenericImage::new("hashicorp/vault", "1.18.4")
         .with_exposed_port(8200.tcp())
@@ -101,7 +101,7 @@ fn create_base_vault_container() -> testcontainers::core::ContainerRequest<Gener
         .with_network("bridge")
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn setup_vault_container(mode: VaultMode) -> ContainerAsync<GenericImage> {
     match mode {
         VaultMode::Dev => create_base_vault_container()
@@ -192,7 +192,7 @@ pub async fn setup_caddy_container(
 
 /// Wait for a Vault server to become available with improved retry logic
 /// This ensures the Vault server is fully ready before tests proceed
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn wait_for_vault_ready(
     vault_addr: &str,
     max_retries: usize,
@@ -277,7 +277,7 @@ pub async fn wait_for_vault_ready(
 
 /// Generates a unique identifier for test resources
 /// Use this to avoid collision between concurrent test runs
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub fn generate_test_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -1,12 +1,16 @@
 //! Authentication setup functions for Vault (AppRole and Kubernetes auth).
 
+#[cfg(any(test, feature = "full-api"))]
 use crate::vault::common::check_response;
+#[cfg(any(test, feature = "full-api"))]
 use crate::vault::{AppRoleCredentials, VaultError};
+#[cfg(any(test, feature = "full-api"))]
 use reqwest::Client;
+#[cfg(any(test, feature = "full-api"))]
 use serde_json::json;
 
 /// Sets up AppRole authentication on Vault and returns the Role ID and Secret ID.
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 pub async fn setup_approle(
     addr: &str,
     token: &str,
@@ -57,7 +61,7 @@ pub async fn setup_approle(
 }
 
 /// Sets up Kubernetes authentication on Vault.
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 pub async fn setup_kubernetes_auth(
     addr: &str,
     token: &str,

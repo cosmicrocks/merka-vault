@@ -4,14 +4,17 @@
 //! enabling different implementations such as direct API calls
 //! or actor-based approaches.
 
+#[cfg(any(test, feature = "full-api"))]
 use crate::vault::{AppRoleCredentials, InitResult, VaultError};
+
+#[cfg(any(test, feature = "full-api"))]
 use async_trait::async_trait;
 
 /// Trait defining core Vault operations.
 ///
 /// This trait abstracts the operations that can be performed against a Vault server,
 /// allowing for different implementations (direct, actor-based, etc.)
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 #[async_trait]
 pub trait VaultOperations {
     /// Initialize a new Vault instance with the specified key shares and threshold.

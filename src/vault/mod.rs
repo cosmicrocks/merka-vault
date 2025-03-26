@@ -36,7 +36,9 @@ pub mod wizard;
 // Re-export key types and traits for convenience
 pub use client::VaultClient;
 pub use error::VaultError;
-pub use init::{InitResult, UnsealResult};
+#[cfg(any(test, feature = "full-api"))]
+pub use init::InitResult;
+pub use init::UnsealResult;
 pub use pki::PkiResult;
 pub use seal::seal_vault;
 
@@ -77,7 +79,7 @@ pub struct VaultConfig {
     pub namespace: Option<String>,
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 impl VaultConfig {
     /// Create a new Vault config
     pub fn new(url: &str) -> Self {

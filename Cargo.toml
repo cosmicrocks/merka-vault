@@ -13,6 +13,10 @@ categories = ["api-bindings", "command-line-utilities"]
 [features]
 # Default features when nothing is specified
 default = []
+# Features for testing utilities
+testing = []
+# Feature for full API (includes all functions even if not used in main code)
+full-api = []
 
 [dependencies]
 actix = "0.13.5"

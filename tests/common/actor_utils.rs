@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 use tokio::time::timeout;
 
 /// Creates a VaultActor with an event channel and optional database
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub fn create_actor(
     vault_addr: &str,
     db_path: Option<&str>,
@@ -40,7 +40,7 @@ pub fn create_actor(
 }
 
 /// Initialize a vault with the actor
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn initialize_vault(
     actor: &Addr<VaultActor>,
     secret_shares: u8,
@@ -66,7 +66,7 @@ pub async fn initialize_vault(
 }
 
 /// Unseal a vault with the actor
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn unseal_vault(actor: &Addr<VaultActor>, keys: Vec<String>) -> Result<bool> {
     info!("Unsealing vault with {} keys", keys.len());
 
@@ -92,7 +92,7 @@ pub async fn unseal_vault(actor: &Addr<VaultActor>, keys: Vec<String>) -> Result
 }
 
 /// Set up a root vault with the actor
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn setup_root_vault(
     actor: &Addr<VaultActor>,
     addr: &str,
@@ -119,7 +119,7 @@ pub async fn setup_root_vault(
 }
 
 /// Set up a sub vault with the actor
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn setup_sub_vault(
     actor: &Addr<VaultActor>,
     root_addr: &str,
@@ -154,7 +154,7 @@ pub async fn setup_sub_vault(
 }
 
 /// Set up transit auto-unseal
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn setup_transit(
     actor: &Addr<VaultActor>,
     token: &str,
@@ -177,7 +177,7 @@ pub async fn setup_transit(
 }
 
 /// Get unwrapped transit token for auto-unseal
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn get_unwrapped_transit_token(
     actor: &Addr<VaultActor>,
     root_addr: &str,
@@ -203,7 +203,7 @@ pub async fn get_unwrapped_transit_token(
 }
 
 /// Initialize a vault with auto-unseal
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn auto_unseal_vault(actor: &Addr<VaultActor>) -> Result<(String, Option<Vec<String>>)> {
     info!("Initializing vault with auto-unseal");
 
@@ -219,7 +219,7 @@ pub async fn auto_unseal_vault(actor: &Addr<VaultActor>) -> Result<(String, Opti
 }
 
 /// Register an auto-unseal relationship between vaults
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn register_unsealer_relationship(
     actor: &Addr<VaultActor>,
     sub_addr: &str,
@@ -245,7 +245,7 @@ pub async fn register_unsealer_relationship(
 }
 
 /// Set the root token for an actor
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn set_root_token(actor: &Addr<VaultActor>, token: &str) -> Result<()> {
     info!("Setting root token for actor");
 
@@ -261,7 +261,7 @@ pub async fn set_root_token(actor: &Addr<VaultActor>, token: &str) -> Result<()>
 }
 
 /// Wait for a specific event with a timeout
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn wait_for_event<T, F>(
     rx: &mut broadcast::Receiver<VaultEvent>,
     predicate: F,
@@ -299,7 +299,7 @@ where
 }
 
 /// Setup PKI in a vault with the actor
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn setup_pki(actor: &Addr<VaultActor>, role_name: &str) -> Result<(String, String)> {
     info!("Setting up PKI with role {}", role_name);
 
@@ -317,7 +317,7 @@ pub async fn setup_pki(actor: &Addr<VaultActor>, role_name: &str) -> Result<(Str
 }
 
 /// Check vault status
-#[allow(dead_code)]
+#[cfg(any(test, feature = "testing"))]
 pub async fn check_status(actor: &Addr<VaultActor>) -> Result<StatusInfo> {
     info!("Checking vault status");
 

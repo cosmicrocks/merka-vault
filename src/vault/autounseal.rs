@@ -29,10 +29,15 @@
 //! // Set up transit, configure target vault, and initialize it
 //! ```
 
-use crate::vault::{init::InitResult, VaultClient, VaultError};
 use serde_json::json;
-use tokio;
 use tracing::{error, warn};
+
+#[cfg(any(test, feature = "full-api"))]
+use crate::vault::{init::InitResult, VaultClient, VaultError};
+#[cfg(not(any(test, feature = "full-api")))]
+use crate::vault::{init::InitResult, VaultError};
+
+use tokio;
 
 /// Sets up the transit engine for auto-unseal.
 pub async fn setup_transit_autounseal(
@@ -100,7 +105,7 @@ async fn setup_transit_engine_internal(
 }
 
 /// Configures a Vault instance to use transit auto-unseal.
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 pub async fn configure_vault_for_autounseal(
     target_addr: &str,
     unsealer_addr: &str,
@@ -160,7 +165,7 @@ pub async fn configure_vault_for_autounseal(
 ///   tls_skip_verify = true
 /// }
 /// ```
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 pub async fn configure_vault_for_autounseal_with_token(
     target_vault_addr: &str,
     unsealer_addr: &str,
@@ -326,7 +331,7 @@ pub async fn init_with_autounseal(vault_addr: &str) -> Result<InitResult, VaultE
 }
 
 /// Generates a wrapped token with transit unseal permissions.
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 pub async fn generate_wrapped_transit_unseal_token(
     vault_addr: &str,
     token: &str,
@@ -414,7 +419,7 @@ pub async fn unwrap_token(vault_addr: &str, wrapped_token: &str) -> Result<Strin
 /// # Returns
 ///
 /// A `Result` containing the new token or an error
-#[allow(dead_code)]
+#[cfg(any(test, feature = "full-api"))]
 pub async fn regenerate_transit_unseal_token(
     vault_addr: &str,
     admin_token: &str,
