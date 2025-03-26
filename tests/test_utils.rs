@@ -14,6 +14,7 @@ pub fn setup_logging() {
 }
 
 /// Checks if the server is already running
+#[allow(dead_code)]
 pub async fn is_server_running() -> bool {
     // Attempt to connect to the server's status endpoint
     reqwest::Client::new()
