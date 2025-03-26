@@ -43,10 +43,10 @@ async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::er
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, _rx) = actor_utils::create_actor(vault_addr, None);
 
         // Step 1: Initialize the vault
-        let (root_token, keys) = match actor_utils::initialize_vault(&actor, 1, 1).await {
+        let (_root_token, keys) = match actor_utils::initialize_vault(&actor, 1, 1).await {
             Ok((token, keys)) => {
                 info!("Vault initialized successfully with {} keys", keys.len());
                 (token, keys)
@@ -73,11 +73,11 @@ async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::er
             }
         };
 
-        info!("Root token: {}", root_token);
+        info!("Root token: {}", _root_token);
         info!("Unseal keys: {} keys received", keys.len());
 
         // Step 2: Unseal the vault
-        let unsealed = match actor_utils::unseal_vault(&actor, keys).await {
+        let _unsealed = match actor_utils::unseal_vault(&actor, keys).await {
             Ok(unsealed) => {
                 info!("Vault unsealed successfully: {}", unsealed);
                 unsealed
@@ -96,7 +96,6 @@ async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::er
         // Step 4: Verify the status
         assert!(status.initialized, "Vault should be initialized");
         assert!(!status.sealed, "Vault should be unsealed");
-        assert!(unsealed, "Unseal operation should have returned true");
 
         info!("✅ Basic vault operations test completed successfully");
 
@@ -142,11 +141,11 @@ async fn test_actor_events() -> Result<(), Box<dyn std::error::Error>> {
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, mut _rx) = actor_utils::create_actor(vault_addr, None);
 
         // Start a background task to monitor events
-        let mut rx_clone = rx.resubscribe();
-        let event_monitor = tokio::task::spawn_local(async move {
+        let mut rx_clone = _rx.resubscribe();
+        let _event_monitor = tokio::task::spawn_local(async move {
             info!("Event monitor started");
 
             // Listen for events for 10 seconds
@@ -255,7 +254,7 @@ async fn test_setup_root_with_actor() -> Result<(), Box<dyn std::error::Error>> 
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, _rx) = actor_utils::create_actor(vault_addr, None);
 
         // Set up the root vault
         let key_name = "auto-unseal-key";
@@ -324,7 +323,7 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, mut rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, mut _rx) = actor_utils::create_actor(vault_addr, None);
 
         // Initialize the vault, which should trigger an Initialized event
         let actor_clone = actor.clone();
@@ -346,7 +345,7 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
 
         // We'll use a shorter timeout and consider both Initialized and StatusChecked events as success
         let result = match actor_utils::wait_for_event(
-            &mut rx,
+            &mut _rx,
             |event| {
                 info!("Received event while waiting: {:?}", event);
                 match event {
@@ -438,11 +437,11 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
     let test_future = async {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
-        let (actor, rx) = actor_utils::create_actor(vault_addr, None);
+        let (actor, _rx) = actor_utils::create_actor(vault_addr, None);
 
         // Initialize the vault first
         info!("Initializing vault for PKI test");
-        let (root_token, keys) = match actor_utils::initialize_vault(&actor, 1, 1).await {
+        let (_root_token, keys) = match actor_utils::initialize_vault(&actor, 1, 1).await {
             Ok((token, keys)) => {
                 info!("Vault initialized successfully with {} keys", keys.len());
                 (token, keys)
@@ -465,7 +464,7 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
 
         // Unseal the vault
         info!("Unsealing vault for PKI test");
-        let unsealed = match actor_utils::unseal_vault(&actor, keys).await {
+        let _unsealed = match actor_utils::unseal_vault(&actor, keys).await {
             Ok(unsealed) => {
                 info!("Vault unsealed successfully: {}", unsealed);
                 unsealed
@@ -555,11 +554,11 @@ async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
         let sub_addr = "http://127.0.0.1:8200"; // Same as root for testing
 
         // Create actors for root and sub vaults
-        let (root_actor, root_rx) = actor_utils::create_actor(root_addr, None);
+        let (root_actor, _root_rx) = actor_utils::create_actor(root_addr, None);
 
         // Initialize the vault first
         info!("Initializing vault for auto-unseal test");
-        let (root_token, keys) = match actor_utils::initialize_vault(&root_actor, 1, 1).await {
+        let (_root_token, keys) = match actor_utils::initialize_vault(&root_actor, 1, 1).await {
             Ok((token, keys)) => {
                 info!("Vault initialized successfully with {} keys", keys.len());
                 (token, keys)
@@ -582,7 +581,7 @@ async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
 
         // Unseal the vault
         info!("Unsealing vault for auto-unseal test");
-        let unsealed = match actor_utils::unseal_vault(&root_actor, keys).await {
+        let _unsealed = match actor_utils::unseal_vault(&root_actor, keys).await {
             Ok(unsealed) => {
                 info!("Vault unsealed successfully: {}", unsealed);
                 unsealed

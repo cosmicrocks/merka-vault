@@ -55,6 +55,7 @@ pub struct VaultStatus {
 }
 
 /// For simplicity, we assume the status endpoint returns the same structure.
+#[allow(dead_code)]
 pub type StatusResult = VaultStatusInfo;
 
 /// Checks the HTTP response from Vault. If successful, returns the JSON body;
@@ -84,6 +85,7 @@ pub async fn check_response(resp: Response) -> Result<Value, VaultError> {
 
 /// Process an HTTP response and deserialize it to the specified type.
 /// Handles common status code checks and error conditions.
+#[allow(dead_code)]
 pub async fn process_response<T: DeserializeOwned>(response: Response) -> Result<T, VaultError> {
     let status = response.status();
 
@@ -120,6 +122,7 @@ pub async fn process_response<T: DeserializeOwned>(response: Response) -> Result
 
 /// Check if a response indicates success without extracting the body.
 /// This is useful for operations where you only care about success/failure.
+#[allow(dead_code)]
 pub fn check_success_response(response: &Response) -> Result<(), VaultError> {
     let status = response.status();
     if !status.is_success() {

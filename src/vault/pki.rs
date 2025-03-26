@@ -354,6 +354,7 @@ pub async fn setup_pki(
 ///
 /// # Returns
 /// A tuple containing the full certificate chain and the private key.
+#[allow(dead_code)]
 pub async fn issue_certificate(
     addr: &str,
     token: &str,

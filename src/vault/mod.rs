@@ -77,6 +77,7 @@ pub struct VaultConfig {
     pub namespace: Option<String>,
 }
 
+#[allow(dead_code)]
 impl VaultConfig {
     /// Create a new Vault config
     pub fn new(url: &str) -> Self {

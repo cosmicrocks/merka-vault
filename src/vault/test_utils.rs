@@ -11,6 +11,7 @@ use tracing::{debug, info};
 pub enum VaultMode {
     Regular,
     Dev,
+    #[allow(dead_code)]
     AutoUnseal {
         transit_unseal_url: String,
         token: String,
@@ -113,6 +114,7 @@ pub async fn wait_for_vault_ready(
 }
 
 /// Sets up a Caddy container for testing TLS certificates
+#[allow(dead_code)]
 pub async fn setup_caddy_container(
     config_path: &str,
     certs_dir: Option<&str>,

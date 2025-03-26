@@ -31,11 +31,13 @@ struct UnsealRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct SealRequest {
     token: String,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct SetupPkiRequest {
     role_name: String,
     common_name: String,
@@ -43,6 +45,7 @@ struct SetupPkiRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct RegisterVaultRequest {
     addr: String,
 }
@@ -66,12 +69,14 @@ struct SetupSubRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct SetupTransitRequest {
     key_name: String,
     token: String,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct GenerateWrappedTokenRequest {
     policy_name: String,
     wrap_ttl: String,
@@ -79,11 +84,13 @@ struct GenerateWrappedTokenRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct UnwrapTokenRequest {
     wrapped_token: String,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct AddUnsealerRelationshipRequest {
     sub_addr: String,
     root_addr: String,

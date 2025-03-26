@@ -55,7 +55,7 @@ impl VaultClient {
         self
     }
 
-    /// Makes a GET request to the Vault API.
+    #[allow(dead_code)]
     pub async fn get(&self, path: &str) -> Result<Value, VaultError> {
         self.request(Method::GET, path, None).await
     }
@@ -70,7 +70,7 @@ impl VaultClient {
         self.request(Method::PUT, path, Some(body)).await
     }
 
-    /// Makes a DELETE request to the Vault API.
+    #[allow(dead_code)]
     pub async fn delete(&self, path: &str) -> Result<Value, VaultError> {
         self.request(Method::DELETE, path, None).await
     }

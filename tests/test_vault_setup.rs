@@ -1,4 +1,3 @@
-use actix::Actor;
 use log::info;
 use merka_vault::database::VaultCredentials;
 use reqwest::Client;

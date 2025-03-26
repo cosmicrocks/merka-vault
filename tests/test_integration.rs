@@ -1,6 +1,6 @@
-use actix::Actor;
 use log::info;
 use merka_vault::database::{DatabaseManager, VaultCredentials};
+use reqwest::Client;
 use serde_json::{json, Value};
 use serial_test::serial;
 

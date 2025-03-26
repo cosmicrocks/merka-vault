@@ -11,6 +11,7 @@ use async_trait::async_trait;
 ///
 /// This trait abstracts the operations that can be performed against a Vault server,
 /// allowing for different implementations (direct, actor-based, etc.)
+#[allow(dead_code)]
 #[async_trait]
 pub trait VaultOperations {
     /// Initialize a new Vault instance with the specified key shares and threshold.

@@ -6,6 +6,7 @@ use reqwest::Client;
 use serde_json::json;
 
 /// Sets up AppRole authentication on Vault and returns the Role ID and Secret ID.
+#[allow(dead_code)]
 pub async fn setup_approle(
     addr: &str,
     token: &str,
@@ -56,6 +57,7 @@ pub async fn setup_approle(
 }
 
 /// Sets up Kubernetes authentication on Vault.
+#[allow(dead_code)]
 pub async fn setup_kubernetes_auth(
     addr: &str,
     token: &str,

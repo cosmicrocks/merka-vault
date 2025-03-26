@@ -785,7 +785,7 @@ impl Handler<CheckStatus> for VaultActor {
     type Result = ResponseFuture<Result<StatusInfo, ActorError>>;
 
     fn handle(&mut self, _: CheckStatus, _ctx: &mut Context<Self>) -> Self::Result {
-        let addr = self.vault_addr.clone();
+        let _addr = self.vault_addr.clone();
         let actor = self.clone();
         Box::pin(async move {
             match actor.status().await {
