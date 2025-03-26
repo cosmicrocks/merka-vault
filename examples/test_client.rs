@@ -280,11 +280,35 @@ async fn run_setup_flow(
             let root_setup_data: Value = serde_json::from_str(&response_text)?;
             info!("Root vault setup parsed response: {}", root_setup_data);
 
-            // Extract the unwrapped token for subsequent steps
-            let unwrapped_token = if let Some(token) =
-                root_setup_data["data"]["unwrapped_token"].as_str()
+            // First try to extract the root token
+            let extracted_token = if let Some(token) =
+                root_setup_data["data"]["root_token"].as_str()
             {
-                token.to_string()
+                if !token.is_empty() {
+                    token.to_string()
+                } else {
+                    // If root_token is empty, check for unwrapped_token
+                    if let Some(unwrapped) = root_setup_data["data"]["unwrapped_token"].as_str() {
+                        unwrapped.to_string()
+                    } else {
+                        // Check if there's an error message we should display
+                        if let Some(error) = root_setup_data["error"].as_str() {
+                            error!("Server returned an error: {}", error);
+                            return Err(
+                                format!("Server error during root vault setup: {}", error).into()
+                            );
+                        }
+
+                        // Cannot continue without a valid token
+                        error!("No valid token found in API response");
+                        return Err(
+                            "Failed to extract a valid token from the setup response".into()
+                        );
+                    }
+                }
+            } else if let Some(unwrapped) = root_setup_data["data"]["unwrapped_token"].as_str() {
+                // No root_token, but we have unwrapped_token
+                unwrapped.to_string()
             } else {
                 // Check if there's an error message we should display
                 if let Some(error) = root_setup_data["error"].as_str() {
@@ -297,31 +321,12 @@ async fn run_setup_flow(
                 return Err("Failed to extract a valid token from the setup response".into());
             };
 
-            // Extract the root token or use unwrapped token if root token is empty
-            if let Some(token) = root_setup_data["data"]["root_token"].as_str() {
-                if !token.is_empty() {
-                    credentials.root_token = token.to_string();
-                    info!(
-                        "Extracted root token from setup response: {} chars",
-                        credentials.root_token.len()
-                    );
-                } else {
-                    // If root_token is empty, use unwrapped_token as fallback
-                    info!("Root token is empty, using unwrapped_token as root token");
-                    credentials.root_token = unwrapped_token.clone();
-                    info!(
-                        "Using unwrapped token as root token: {} chars",
-                        credentials.root_token.len()
-                    );
-                }
-            } else {
-                // If root_token is not present, use unwrapped_token
-                credentials.root_token = unwrapped_token.clone();
-                info!(
-                    "No root_token in response, using unwrapped token as root token: {} chars",
-                    credentials.root_token.len()
-                );
-            }
+            // Use the extracted token as our root token
+            credentials.root_token = extracted_token;
+            info!(
+                "Extracted token from setup response: {} chars",
+                credentials.root_token.len()
+            );
 
             // Look for unseal keys in the response
             if let Some(keys) = root_setup_data["data"]["keys"].as_array() {

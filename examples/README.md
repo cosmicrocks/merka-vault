@@ -188,15 +188,15 @@ The examples can also be used for integration testing:
 
 ### Example Test
 
-The `example_test.rs` file demonstrates how to use the web server and test client together as an integration test.
+The `example_test.rs` file demonstrates how to use the web server and test client together as an integration test. It automatically sets up and manages the required Docker Compose environment.
 
 To run the integration test:
 
 ```bash
-cargo test --test example_test -- --ignored
+cargo test --test example_test
 ```
 
-Note: The test is marked as `#[ignore]` by default since it requires the Docker Compose Vault instances to be running.
+This test runs in serial mode to avoid port conflicts with other Docker Compose tests.
 
 ### Database-Backed Integration Tests
 

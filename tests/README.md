@@ -84,7 +84,7 @@ The Merka Vault library has a strict architectural separation:
 - `test_actor_integration.rs` - Tests for the actor-based API
 - `test_integration.rs` - End-to-end tests with the web server and database
 - `test_vault_setup.rs` - Tests for vault setup workflows
-- `example_test.rs` - Tests for example applications
+- `example_test.rs` - Tests for example applications (automatically manages Docker Compose environment)
 - `common/mod.rs` - Shared utilities and helpers for tests
 - `common/actor_utils.rs` - Actor-based testing utilities
 

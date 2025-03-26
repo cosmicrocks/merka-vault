@@ -29,6 +29,7 @@ pub async fn is_server_running() -> bool {
 /// A struct to handle the docker-compose environment
 pub struct DockerComposeEnv {
     pub up_succeeded: bool,
+    pub start_attempted: bool,
 }
 
 impl DockerComposeEnv {
@@ -36,11 +37,21 @@ impl DockerComposeEnv {
         // Initialize
         DockerComposeEnv {
             up_succeeded: false,
+            start_attempted: false,
         }
     }
 
     pub fn start(&mut self) -> io::Result<()> {
         info!("Starting docker-compose environment...");
+        self.start_attempted = true;
+
+        // Force cleanup of any existing containers first
+        let cleanup_output = Command::new("docker-compose").arg("down").output();
+
+        if let Err(e) = cleanup_output {
+            info!("Initial cleanup warning (not critical): {}", e);
+        }
+
         let output = Command::new("docker-compose")
             .arg("up")
             .arg("-d")
@@ -63,7 +74,7 @@ impl DockerComposeEnv {
     }
 
     pub fn stop(&self) -> io::Result<()> {
-        if self.up_succeeded {
+        if self.start_attempted {
             info!("Stopping docker-compose environment...");
             let output = Command::new("docker-compose").arg("down").output()?;
 
@@ -73,6 +84,21 @@ impl DockerComposeEnv {
             } else {
                 let error_msg = String::from_utf8_lossy(&output.stderr);
                 error!("Failed to stop docker-compose: {}", error_msg);
+
+                // Try a more aggressive cleanup if the normal stop fails
+                let force_output = Command::new("docker-compose")
+                    .arg("down")
+                    .arg("--volumes")
+                    .arg("--remove-orphans")
+                    .output();
+
+                if let Ok(force_result) = force_output {
+                    if force_result.status.success() {
+                        info!("Docker-compose force-stopped successfully");
+                        return Ok(());
+                    }
+                }
+
                 Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("Docker-compose down failed: {}", error_msg),
@@ -88,10 +114,47 @@ impl DockerComposeEnv {
 // Clean up when the struct is dropped
 impl Drop for DockerComposeEnv {
     fn drop(&mut self) {
-        if self.up_succeeded {
+        if self.start_attempted {
+            info!("Cleaning up Docker from Drop implementation");
+
+            // First try normal cleanup
             if let Err(e) = self.stop() {
                 error!("Failed to clean up docker-compose: {}", e);
+
+                // If normal cleanup fails, try more aggressive approach
+                let _ = Command::new("docker-compose")
+                    .arg("down")
+                    .arg("--volumes")
+                    .arg("--remove-orphans")
+                    .output();
+
+                // As a last resort, try to remove specific containers directly
+                let _ = Command::new("docker")
+                    .args(["rm", "-f", "merka-vault-root", "merka-vault-sub"])
+                    .output();
+
+                // Finally run docker system prune to clean up any remaining resources
+                let prune_output = Command::new("docker")
+                    .args(["system", "prune", "-f"])
+                    .output();
+
+                match prune_output {
+                    Ok(output) => {
+                        if output.status.success() {
+                            info!("Docker system prune completed successfully");
+                        } else {
+                            let error_msg = String::from_utf8_lossy(&output.stderr);
+                            error!("Docker system prune failed: {}", error_msg);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to run docker system prune: {}", e);
+                    }
+                }
             }
+
+            // Wait a bit to ensure containers are fully stopped
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
     }
 }

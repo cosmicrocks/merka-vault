@@ -57,6 +57,7 @@ pub async fn get_vault_status(addr: &str) -> Result<VaultStatus, VaultError> {
 mod tests {
     use super::*;
     use crate::init_logging;
+    use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
 
     #[tokio::test]
     async fn test_get_vault_status_connection_error() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,10 +73,18 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_get_vault_status_with_real_vault() -> Result<(), Box<dyn std::error::Error>> {
         init_logging();
-        let status = get_vault_status("http://127.0.0.1:8200").await?;
+
+        // Use a test container instead of a manually configured external Vault
+        let vault_container = setup_vault_container(VaultMode::Dev).await;
+        let port = vault_container.get_host_port_ipv4(8200).await?;
+        let vault_addr = format!("http://127.0.0.1:{}", port);
+
+        // Wait for vault to become available
+        wait_for_vault_ready(&vault_addr, 10, 500).await?;
+
+        let status = get_vault_status(&vault_addr).await?;
         assert!(status.initialized, "Vault should be initialized");
         assert!(!status.sealed, "Vault should not be sealed");
         Ok(())

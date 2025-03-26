@@ -1,5 +1,16 @@
+use log::info;
+use serial_test::serial;
+use std::process::{Child, Command};
+use std::thread;
+use std::time::Duration;
+use tokio::runtime::Runtime;
+
+mod test_utils;
+use test_utils::{setup_logging, DockerComposeEnv};
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::process::{Child, Command};
     use std::thread;
     use std::time::Duration;
@@ -14,8 +25,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // This test requires docker-compose vaults to be running
+    #[serial]
     fn test_example_web_server() {
+        // Setup logging
+        setup_logging();
+        info!("Starting example web server test");
+
+        // Start docker-compose environment
+        let mut docker = DockerComposeEnv::new();
+        match docker.start() {
+            Ok(_) => info!("Docker environment started successfully"),
+            Err(e) => {
+                info!("Docker environment start failed: {}. Test skipped.", e);
+                return;
+            }
+        };
+
         // Ensure the example binaries are built
         let status = Command::new("cargo")
             .args([
@@ -44,7 +69,13 @@ mod tests {
             // Start the test client
             let mut test_client = start_process(
                 "cargo",
-                &["run", "--example", "test_client", "--restart-sub-vault"],
+                &[
+                    "run",
+                    "--example",
+                    "test_client",
+                    "--",
+                    "--restart-sub-vault",
+                ],
             );
 
             // Wait for test client to complete
@@ -69,6 +100,13 @@ mod tests {
         web_server
             .wait()
             .expect("Failed to wait for web server to exit");
+
+        // Explicitly stop Docker at the end of the test
+        if let Err(e) = docker.stop() {
+            info!("Failed to stop Docker Compose: {}", e);
+        } else {
+            info!("Docker Compose environment stopped successfully");
+        }
 
         // Check if the test was successful
         assert!(result, "Example test failed");

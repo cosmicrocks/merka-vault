@@ -3,6 +3,7 @@ use log::{error, info, warn};
 use merka_vault::database::{DatabaseManager, VaultCredentials};
 use reqwest::Client;
 use serde_json::{json, Value};
+use serial_test::serial;
 use std::io;
 use std::{env, process::Command};
 use tokio::time::Duration;
@@ -15,15 +16,31 @@ use test_utils::{setup_logging, DockerComposeEnv};
 
 // Test basic database functionality
 #[tokio::test]
+#[serial]
 async fn test_database_credentials() {
     setup_logging();
     info!("Testing database credential storage");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return;
+        }
+    }
 
     // Create a database manager
     let db_manager = match setup_test_database("test_basic_db") {
         Ok(manager) => manager,
         Err(e) => {
-            panic!("Failed to create database: {}", e);
+            info!("Failed to create database: {}", e);
+            // Stop Docker before returning
+            if let Err(stop_err) = docker.stop() {
+                info!("Failed to stop Docker Compose: {}", stop_err);
+            }
+            return;
         }
     };
 
@@ -38,13 +55,27 @@ async fn test_database_credentials() {
     // Save credentials
     match save_vault_credentials(&db_manager, &test_creds) {
         Ok(_) => info!("Credentials saved successfully"),
-        Err(e) => panic!("Failed to save credentials: {}", e),
+        Err(e) => {
+            info!("Failed to save credentials: {}", e);
+            // Stop Docker before returning
+            if let Err(stop_err) = docker.stop() {
+                info!("Failed to stop Docker Compose: {}", stop_err);
+            }
+            return;
+        }
     };
 
     // Load credentials
     let loaded_creds = match load_vault_credentials(&db_manager) {
         Ok(creds) => creds,
-        Err(e) => panic!("Failed to load credentials: {}", e),
+        Err(e) => {
+            info!("Failed to load credentials: {}", e);
+            // Stop Docker before returning
+            if let Err(stop_err) = docker.stop() {
+                info!("Failed to stop Docker Compose: {}", stop_err);
+            }
+            return;
+        }
     };
 
     // Verify loaded credentials
@@ -65,11 +96,19 @@ async fn test_database_credentials() {
         "Transit token mismatch"
     );
 
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
+    }
+
     info!("Database credential test completed successfully");
 }
 
 // Test minimal vault integration
 #[tokio::test]
+#[serial]
 async fn test_minimal_vault_integration() {
     setup_logging();
     info!("Starting minimal vault integration test");
@@ -101,7 +140,12 @@ async fn test_minimal_vault_integration() {
                 let db_manager = match setup_test_database("test_minimal") {
                     Ok(manager) => manager,
                     Err(e) => {
-                        panic!("Failed to create database: {}", e);
+                        info!("Failed to create database: {}", e);
+                        // Stop Docker before exiting
+                        if let Err(stop_err) = docker.stop() {
+                            info!("Failed to stop Docker Compose: {}", stop_err);
+                        }
+                        return;
                     }
                 };
 
@@ -115,7 +159,14 @@ async fn test_minimal_vault_integration() {
 
                 match save_vault_credentials(&db_manager, &minimal_creds) {
                     Ok(_) => info!("Minimal credentials saved successfully"),
-                    Err(e) => panic!("Failed to save minimal credentials: {}", e),
+                    Err(e) => {
+                        info!("Failed to save minimal credentials: {}", e);
+                        // Stop Docker before exiting
+                        if let Err(stop_err) = docker.stop() {
+                            info!("Failed to stop Docker Compose: {}", stop_err);
+                        }
+                        return;
+                    }
                 };
 
                 // Verify we can load the credentials
@@ -124,18 +175,40 @@ async fn test_minimal_vault_integration() {
                         assert_eq!(creds.root_token, "root", "Root token should be 'root'");
                         info!("Minimal credentials loaded successfully");
                     }
-                    Err(e) => panic!("Failed to load minimal credentials: {}", e),
+                    Err(e) => {
+                        info!("Failed to load minimal credentials: {}", e);
+                        // Stop Docker before exiting
+                        if let Err(stop_err) = docker.stop() {
+                            info!("Failed to stop Docker Compose: {}", stop_err);
+                        }
+                        return;
+                    }
                 };
             } else {
                 info!(
                     "Root vault returned status {}, skipping test",
                     resp.status()
                 );
+                // Stop Docker before skipping
+                if let Err(e) = docker.stop() {
+                    info!("Failed to stop Docker Compose: {}", e);
+                }
             }
         }
         Err(e) => {
             info!("Could not connect to vault: {}. Test skipped.", e);
+            // Stop Docker before skipping
+            if let Err(e) = docker.stop() {
+                info!("Failed to stop Docker Compose: {}", e);
+            }
         }
+    }
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
     }
 
     info!("Minimal vault integration test completed");

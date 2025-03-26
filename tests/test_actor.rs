@@ -1,6 +1,7 @@
 use anyhow::Result;
 use log::{error, info};
 use merka_vault::actor::{VaultActor, VaultEvent};
+use serial_test::serial;
 use tokio::time::Duration;
 
 // Import our actor utilities
@@ -8,7 +9,7 @@ use crate::common::actor_utils;
 mod common;
 mod test_utils;
 
-use test_utils::setup_logging;
+use test_utils::{setup_logging, DockerComposeEnv};
 
 /// This test demonstrates a basic vault setup flow using only the actor interface.
 /// It performs the following steps:
@@ -19,10 +20,21 @@ use test_utils::setup_logging;
 /// This is a good example of how to use the actor interface for testing
 /// instead of directly accessing the vault module.
 #[tokio::test]
+#[serial]
 async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::error::Error>> {
     // Setup logging
     setup_logging();
     info!("Starting basic vault operations test using actor API");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return Ok(());
+        }
+    };
 
     // Create a LocalSet to run actor operations in
     let local = tokio::task::LocalSet::new();
@@ -52,6 +64,10 @@ async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::er
                     // For this example, we'll just return dummy values
                     ("dummy-token".to_string(), vec!["dummy-key".to_string()])
                 } else {
+                    // Stop Docker before returning with error
+                    if let Err(stop_err) = docker.stop() {
+                        info!("Failed to stop Docker Compose: {}", stop_err);
+                    }
                     return Err(format!("Failed to initialize vault: {}", e).into());
                 }
             }
@@ -88,16 +104,36 @@ async fn test_basic_vault_operations_using_actor() -> Result<(), Box<dyn std::er
     };
 
     // Run the test future in the LocalSet
-    local.run_until(test_future).await
+    let result = local.run_until(test_future).await;
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
+    }
+
+    result
 }
 
 /// This test demonstrates how to use the event system with the actor.
 /// It allows you to track operations asynchronously.
 #[tokio::test]
+#[serial]
 async fn test_actor_events() -> Result<(), Box<dyn std::error::Error>> {
     // Setup logging
     setup_logging();
     info!("Starting actor events test");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return Ok(());
+        }
+    };
 
     // Create a LocalSet to run actor operations in
     let local = tokio::task::LocalSet::new();
@@ -181,16 +217,36 @@ async fn test_actor_events() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Run the test future in the LocalSet
-    local.run_until(test_future).await
+    let result = local.run_until(test_future).await;
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
+    }
+
+    result
 }
 
 /// This test demonstrates how to set up a root vault with transit
 /// engine for auto-unseal, using only the actor interface.
 #[tokio::test]
+#[serial]
 async fn test_setup_root_with_actor() -> Result<(), Box<dyn std::error::Error>> {
     // Setup logging
     setup_logging();
     info!("Starting setup root vault test using actor API");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return Ok(());
+        }
+    };
 
     // Create a LocalSet to run actor operations in
     let local = tokio::task::LocalSet::new();
@@ -230,16 +286,36 @@ async fn test_setup_root_with_actor() -> Result<(), Box<dyn std::error::Error>> 
     };
 
     // Run the test future in the LocalSet
-    local.run_until(test_future).await
+    let result = local.run_until(test_future).await;
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
+    }
+
+    result
 }
 
 /// This test demonstrates how to wait for specific events using
 /// the wait_for_event utility function.
 #[tokio::test]
+#[serial]
 async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
     // Setup logging
     setup_logging();
     info!("Starting event waiting test");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return Ok(());
+        }
+    };
 
     // Create a LocalSet to run actor operations in
     let local = tokio::task::LocalSet::new();
@@ -298,6 +374,10 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 info!("❌ Failed to receive expected event: {}", e);
+                // Stop Docker before returning with error
+                if let Err(stop_err) = docker.stop() {
+                    info!("Failed to stop Docker Compose: {}", stop_err);
+                }
                 return Err(e.into());
             }
         };
@@ -312,13 +392,23 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Run the test future in the LocalSet with a timeout
-    match tokio::time::timeout(Duration::from_secs(5), local.run_until(test_future)).await {
-        Ok(result) => result,
-        Err(_) => {
-            info!("❌ Test timed out after 5 seconds");
-            Err("Test timed out".into())
-        }
+    let result =
+        match tokio::time::timeout(Duration::from_secs(5), local.run_until(test_future)).await {
+            Ok(result) => result,
+            Err(_) => {
+                info!("❌ Test timed out after 5 seconds");
+                Err("Test timed out".into())
+            }
+        };
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
     }
+
+    result
 }
 
 /// This test demonstrates setting up PKI infrastructure in a vault
@@ -329,10 +419,21 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
 /// 2. Set up PKI infrastructure with a specified role name
 /// 3. Verify the certificate chain and role
 #[tokio::test]
+#[serial]
 async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
     // Setup logging
     setup_logging();
     info!("Starting PKI setup test using actor API");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return Ok(());
+        }
+    };
 
     // Create a LocalSet to run actor operations in
     let local = tokio::task::LocalSet::new();
@@ -342,6 +443,43 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
         // Create the actor and get an event receiver
         let vault_addr = "http://127.0.0.1:8200";
         let (actor, mut rx) = actor_utils::create_actor(vault_addr, None);
+
+        // Initialize the vault first
+        info!("Initializing vault for PKI test");
+        let (root_token, keys) = match actor_utils::initialize_vault(&actor, 1, 1).await {
+            Ok((token, keys)) => {
+                info!("Vault initialized successfully with {} keys", keys.len());
+                (token, keys)
+            }
+            Err(e) => {
+                // If initialization fails, it might be because the vault is already initialized
+                info!("Initialization failed: {}, checking status", e);
+                // Check the vault status
+                let status = actor_utils::check_status(&actor).await?;
+                if status.initialized {
+                    info!("Vault is already initialized, proceeding with test");
+                    // In a real test, you would need to get the token and keys from somewhere
+                    // For this example, we'll just return dummy values
+                    ("dummy-token".to_string(), vec!["dummy-key".to_string()])
+                } else {
+                    return Err(format!("Failed to initialize vault: {}", e).into());
+                }
+            }
+        };
+
+        // Unseal the vault
+        info!("Unsealing vault for PKI test");
+        let unsealed = match actor_utils::unseal_vault(&actor, keys).await {
+            Ok(unsealed) => {
+                info!("Vault unsealed successfully: {}", unsealed);
+                unsealed
+            }
+            Err(e) => {
+                info!("Unsealing failed: {}, checking status", e);
+                let status = actor_utils::check_status(&actor).await?;
+                !status.sealed
+            }
+        };
 
         // First make sure the vault is initialized and unsealed
         let status = actor_utils::check_status(&actor).await?;
@@ -364,6 +502,7 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
 
         // For now, we'll just assert that we can get the vault status
         assert!(status.initialized, "Vault should be initialized");
+        assert!(!status.sealed, "Vault should be unsealed");
 
         info!("✅ PKI setup test completed successfully (verification only)");
 
@@ -371,7 +510,16 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Run the test future in the LocalSet
-    local.run_until(test_future).await
+    let result = local.run_until(test_future).await;
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
+    }
+
+    result
 }
 
 /// This test demonstrates setting up auto-unseal between two vaults
@@ -384,10 +532,21 @@ async fn test_pki_setup() -> Result<(), Box<dyn std::error::Error>> {
 /// 3. Register the unsealer relationship between the vaults
 /// 4. Test auto-unseal operation
 #[tokio::test]
+#[serial]
 async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
     // Setup logging
     setup_logging();
     info!("Starting auto-unseal setup test");
+
+    // Start docker-compose environment
+    let mut docker = DockerComposeEnv::new();
+    match docker.start() {
+        Ok(_) => info!("Docker environment started successfully"),
+        Err(e) => {
+            info!("Docker environment start failed: {}. Test skipped.", e);
+            return Ok(());
+        }
+    };
 
     // Create a LocalSet to run actor operations in
     let local = tokio::task::LocalSet::new();
@@ -401,6 +560,43 @@ async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
 
         // Create actors for root and sub vaults
         let (root_actor, mut root_rx) = actor_utils::create_actor(root_addr, None);
+
+        // Initialize the vault first
+        info!("Initializing vault for auto-unseal test");
+        let (root_token, keys) = match actor_utils::initialize_vault(&root_actor, 1, 1).await {
+            Ok((token, keys)) => {
+                info!("Vault initialized successfully with {} keys", keys.len());
+                (token, keys)
+            }
+            Err(e) => {
+                // If initialization fails, it might be because the vault is already initialized
+                info!("Initialization failed: {}, checking status", e);
+                // Check the vault status
+                let status = actor_utils::check_status(&root_actor).await?;
+                if status.initialized {
+                    info!("Vault is already initialized, proceeding with test");
+                    // In a real test, you would need to get the token and keys from somewhere
+                    // For this example, we'll just return dummy values
+                    ("dummy-token".to_string(), vec!["dummy-key".to_string()])
+                } else {
+                    return Err(format!("Failed to initialize vault: {}", e).into());
+                }
+            }
+        };
+
+        // Unseal the vault
+        info!("Unsealing vault for auto-unseal test");
+        let unsealed = match actor_utils::unseal_vault(&root_actor, keys).await {
+            Ok(unsealed) => {
+                info!("Vault unsealed successfully: {}", unsealed);
+                unsealed
+            }
+            Err(e) => {
+                info!("Unsealing failed: {}, checking status", e);
+                let status = actor_utils::check_status(&root_actor).await?;
+                !status.sealed
+            }
+        };
 
         // Check if the vault is already initialized
         let status = actor_utils::check_status(&root_actor).await?;
@@ -419,6 +615,7 @@ async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
         // Verify root vault status
         let root_status = actor_utils::check_status(&root_actor).await?;
         assert!(root_status.initialized, "Root vault should be initialized");
+        assert!(!root_status.sealed, "Root vault should be unsealed");
 
         info!("✅ Auto-unseal setup test completed successfully (relationship registration only)");
 
@@ -426,5 +623,14 @@ async fn test_auto_unseal_setup() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Run the test future in the LocalSet
-    local.run_until(test_future).await
+    let result = local.run_until(test_future).await;
+
+    // Explicitly stop Docker at the end of the test
+    if let Err(e) = docker.stop() {
+        info!("Failed to stop Docker Compose: {}", e);
+    } else {
+        info!("Docker Compose environment stopped successfully");
+    }
+
+    result
 }

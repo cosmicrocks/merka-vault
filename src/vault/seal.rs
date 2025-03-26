@@ -16,24 +16,18 @@ use tracing::info;
 /// # Arguments
 ///
 /// * `addr` - The Vault server's URL.
-/// * `token` - The authentication token to use for the sealing operation.
+/// * `token` - The authentication token.
 ///
 /// # Returns
 ///
-/// A `Result` indicating success (`Ok(())`) or containing a `VaultError` on failure.
+/// A `Result` indicating success or containing a `VaultError` on failure.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```no_run
-/// # async fn example() -> Result<(), merka_vault::vault::VaultError> {
-/// use merka_vault::vault::seal_vault;
-///
-/// let vault_addr = "http://127.0.0.1:8200";
-/// let token = "root_token";
-///
-/// seal_vault(vault_addr, token).await?;
-/// # Ok(())
-/// # }
+/// This example is for internal use only and not part of the public API.
+/// ```ignore
+/// // This is an internal API not meant to be used directly
+/// // See the actor API or CLI for how to seal a vault
 /// ```
 pub async fn seal_vault(addr: &str, token: &str) -> Result<(), VaultError> {
     info!("Sealing vault at {}", addr);
@@ -55,7 +49,7 @@ mod tests {
     use crate::init_logging;
     use crate::vault::init::unseal_vault;
     use crate::vault::status::get_vault_status;
-    use tokio::time::Duration;
+    use crate::vault::test_utils::{setup_vault_container, VaultMode};
 
     // Test for invalid token error handling that doesn't require a real Vault
     #[tokio::test]
@@ -97,67 +91,107 @@ mod tests {
         Ok(())
     }
 
-    // Test with real Vault (optional)
-    // Run with: cargo test -p merka-vault vault::seal::tests::test_seal_vault_with_real_vault -- --ignored
+    // Test using Docker container with auto-configured settings
+    // Run with: cargo test -p merka-vault vault::seal::tests::test_seal_vault_with_real_vault
     #[tokio::test]
-    #[ignore]
     async fn test_seal_vault_with_real_vault() -> Result<(), Box<dyn std::error::Error>> {
         init_logging();
 
-        // Connect to a local Vault instance
-        let vault_addr = "http://127.0.0.1:8200";
-        println!("Connecting to Vault at: {}", vault_addr);
-
-        // Check if Vault is available
-        let status = match get_vault_status(vault_addr).await {
-            Ok(s) => s,
+        // Set up a test container for Vault in regular mode
+        let vault_container = setup_vault_container(VaultMode::Regular).await;
+        let port = match vault_container.get_host_port_ipv4(8200).await {
+            Ok(p) => p,
             Err(e) => {
-                println!("Vault status check failed: {}. Is Vault running?", e);
-                println!(
-                    "This test requires a running Vault instance at {}",
-                    vault_addr
-                );
-                println!("You can start one with: docker run -p 8200:8200 -e VAULT_DEV_ROOT_TOKEN_ID=root -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 hashicorp/vault:1.13.3");
-                return Ok(());
+                return Err(format!("Failed to get container port: {}", e).into());
             }
         };
+        let vault_addr = format!("http://127.0.0.1:{}", port);
 
-        // Only proceed with test if Vault is initialized and not sealed
-        if !status.initialized {
-            println!("Vault is not initialized. Skipping test.");
-            return Ok(());
+        // Instead of waiting for vault to be ready with specific status,
+        // let's just wait until the container is responsive
+        let client = reqwest::Client::new();
+        let health_url = format!("{}/v1/sys/health", vault_addr);
+
+        // Wait for the vault container to be responsive
+        for attempt in 1..=30 {
+            match client.get(&health_url).send().await {
+                Ok(_) => {
+                    info!("Vault is responsive after {} attempts", attempt);
+                    break;
+                }
+                Err(e) => {
+                    info!(
+                        "Waiting for Vault to be responsive... attempt {}: {}",
+                        attempt, e
+                    );
+                    if attempt == 30 {
+                        return Err(format!(
+                            "Vault container not responsive after 30 attempts: {}",
+                            e
+                        )
+                        .into());
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                }
+            }
         }
 
-        if status.sealed {
-            println!("Vault is sealed. Skipping test.");
-            return Ok(());
+        // In regular mode, we need to initialize Vault first
+        use crate::vault::init::init_vault;
+
+        // Initialize the vault with 1 key share for simplicity
+        let init_result = match init_vault(&vault_addr, 1, 1, None, None).await {
+            Ok(result) => result,
+            Err(e) => return Err(format!("Failed to initialize vault: {}", e).into()),
+        };
+        let root_token = init_result.root_token.clone();
+        let unseal_keys = init_result.keys.clone();
+
+        // Unseal the vault using the keys we just got
+        if let Err(e) = unseal_vault(&vault_addr, &unseal_keys).await {
+            return Err(format!("Failed to unseal vault: {}", e).into());
         }
 
-        println!("Vault is initialized and unsealed. Proceeding with test.");
-
-        // In dev mode, the root token is "root"
-        let root_token = "root".to_string();
+        // Verify vault is unsealed
+        let status = match get_vault_status(&vault_addr).await {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to get vault status: {}", e).into()),
+        };
+        assert!(status.initialized, "Vault should be initialized");
+        assert!(
+            !status.sealed,
+            "Vault should be unsealed after initialization"
+        );
 
         // Now we can test sealing
         // Seal the vault using the root token
-        seal_vault(vault_addr, &root_token).await?;
+        if let Err(e) = seal_vault(&vault_addr, &root_token).await {
+            return Err(format!("Failed to seal vault: {}", e).into());
+        }
 
         // Verify that vault is sealed
-        let status = get_vault_status(vault_addr).await?;
+        let status = match get_vault_status(&vault_addr).await {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to get vault status after sealing: {}", e).into()),
+        };
         assert!(status.sealed, "Vault should be sealed after seal operation");
 
-        // For test cleanup, unseal the vault again
-        // In dev mode, any key works for unsealing
-        unseal_vault(vault_addr, &[String::new()]).await?;
+        // Unseal the vault again using our valid keys
+        if let Err(e) = unseal_vault(&vault_addr, &unseal_keys).await {
+            return Err(format!("Failed to unseal vault after sealing: {}", e).into());
+        }
 
         // Verify vault is unsealed again
-        let status = get_vault_status(vault_addr).await?;
+        let status = match get_vault_status(&vault_addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(format!("Failed to get vault status after unsealing: {}", e).into())
+            }
+        };
         assert!(
             !status.sealed,
             "Vault should be unsealed after unseal operation"
         );
-
-        println!("Test completed successfully. Sealing and unsealing verified.");
 
         Ok(())
     }
