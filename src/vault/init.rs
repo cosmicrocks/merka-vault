@@ -373,8 +373,7 @@ pub async fn seal_vault(addr: &str, token: &str) -> Result<(), VaultError> {
 mod tests {
     use super::*;
     use crate::init_logging;
-    
-    
+
     use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
     use tracing::info;
 

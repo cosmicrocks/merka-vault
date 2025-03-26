@@ -19,7 +19,8 @@ pub async fn is_server_running() -> bool {
     reqwest::Client::new()
         .get("http://localhost:8080/api/status")
         .send()
-        .await.is_ok()
+        .await
+        .is_ok()
 }
 
 /// A struct to handle the docker-compose environment

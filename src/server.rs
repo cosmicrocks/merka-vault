@@ -11,10 +11,9 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::actor::{
-    AddUnsealerRelationship, CheckDependencies, CheckStatus,
-    GetCurrentAddress, GetUnwrappedTransitToken, RegisterVault,
-    SetCurrentAddress, SetRootToken, SetupRoot, SetupSub, SyncSubToken,
-    SyncToken, SyncTransitToken, UnsealVault, VaultActor, VaultEvent,
+    AddUnsealerRelationship, CheckDependencies, CheckStatus, GetCurrentAddress,
+    GetUnwrappedTransitToken, RegisterVault, SetCurrentAddress, SetRootToken, SetupRoot, SetupSub,
+    SyncSubToken, SyncToken, SyncTransitToken, UnsealVault, VaultActor, VaultEvent,
 };
 use crate::database::DatabaseManager;
 
@@ -394,10 +393,7 @@ async fn setup_root_vault(
                     "Root vault setup completed successfully".to_string(),
                 ),
                 // Include the token if it was provided
-                (
-                    "root_token",
-                    req.token.clone().unwrap_or_default(),
-                ),
+                ("root_token", req.token.clone().unwrap_or_default()),
             ]);
 
             HttpResponse::Ok().json(ApiResponse {

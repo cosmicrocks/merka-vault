@@ -285,10 +285,10 @@ pub async fn generate_wrapped_transit_token(
 mod tests {
     use super::*;
     use crate::init_logging;
-    
+
     use crate::vault::status::get_vault_status;
     use crate::vault::test_utils::{setup_vault_container, wait_for_vault_ready, VaultMode};
-    
+
     use tracing::info;
 
     // Test for transit engine setup error handling with invalid token

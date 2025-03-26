@@ -353,11 +353,7 @@ async fn test_waiting_for_events() -> Result<(), Box<dyn std::error::Error>> {
                     VaultEvent::Initialized { root_token, keys } => {
                         Some((root_token.clone(), keys.clone()))
                     }
-                    VaultEvent::StatusChecked {
-                        initialized,
-                        
-                        ..
-                    } if *initialized => {
+                    VaultEvent::StatusChecked { initialized, .. } if *initialized => {
                         // If we get a status check and it's initialized, use dummy values
                         Some(("dummy-token".to_string(), vec!["dummy-key".to_string()]))
                     }

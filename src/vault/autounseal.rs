@@ -476,8 +476,6 @@ pub async fn regenerate_transit_unseal_token(
 mod tests {
     use super::*;
     use crate::init_logging;
-    
-    
 
     // Unit test for unwrap_token functionality
     #[tokio::test]
