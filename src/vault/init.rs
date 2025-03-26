@@ -136,7 +136,7 @@ pub async fn init_vault(
     }
 }
 
-/// Initializes Vault by calling the native sys/init endpoint.
+/// Initializes Vault infrastructure with custom options.
 ///
 /// # Arguments
 ///
@@ -147,6 +147,7 @@ pub async fn init_vault(
 ///
 /// A `Result` containing the initialization response or an error
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn initialize_vault_infrastructure(
     addr: &str,
     options: InitOptions,
@@ -181,6 +182,7 @@ pub async fn initialize_vault_infrastructure(
 ///
 /// A `Result` indicating success or containing a `VaultError` on failure.
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn unseal_vault(addr: &str, keys: &[String]) -> Result<(), VaultError> {
     let client = Client::new();
     let req_url = format!("{}/v1/sys/unseal", addr);
@@ -300,6 +302,7 @@ pub async fn unseal_root_vault(addr: &str, keys: Vec<String>) -> AnyhowResult<Un
 }
 
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn initialize_vault(addr: &str) -> AnyhowResult<InitResult> {
     info!("Initializing vault at {}", addr);
     let client = Client::new();
@@ -359,6 +362,7 @@ pub async fn initialize_vault(addr: &str) -> AnyhowResult<InitResult> {
 ///
 /// A `Result` indicating success or containing a `VaultError` on failure.
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn seal_vault(addr: &str, token: &str) -> Result<(), VaultError> {
     let client = Client::new();
     let req_url = format!("{}/v1/sys/seal", addr);

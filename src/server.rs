@@ -33,20 +33,25 @@ struct UnsealRequest {
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct SealRequest {
+    #[allow(dead_code)]
     token: String,
 }
 
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct SetupPkiRequest {
+    #[allow(dead_code)]
     role_name: String,
+    #[allow(dead_code)]
     common_name: String,
+    #[allow(dead_code)]
     ttl: String,
 }
 
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct RegisterVaultRequest {
+    #[allow(dead_code)]
     addr: String,
 }
 
@@ -71,29 +76,38 @@ struct SetupSubRequest {
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct SetupTransitRequest {
+    #[allow(dead_code)]
     key_name: String,
+    #[allow(dead_code)]
     token: String,
 }
 
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct GenerateWrappedTokenRequest {
+    #[allow(dead_code)]
     policy_name: String,
+    #[allow(dead_code)]
     wrap_ttl: String,
+    #[allow(dead_code)]
     token: String,
 }
 
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct UnwrapTokenRequest {
+    #[allow(dead_code)]
     wrapped_token: String,
 }
 
 #[derive(Deserialize)]
 #[cfg_attr(not(any(test, feature = "full-api")), allow(dead_code))]
 struct AddUnsealerRelationshipRequest {
+    #[allow(dead_code)]
     sub_addr: String,
+    #[allow(dead_code)]
     root_addr: String,
+    #[allow(dead_code)]
     key_name: String,
 }
 

@@ -208,6 +208,7 @@ pub async fn create_transit_unseal_policy(
 ///
 /// A Result containing the generated token or an error
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn generate_transit_unseal_token(
     vault_addr: &str,
     token: &str,

@@ -82,6 +82,7 @@ pub struct VaultConfig {
 #[cfg(any(test, feature = "full-api"))]
 impl VaultConfig {
     /// Create a new Vault config
+    #[allow(dead_code)]
     pub fn new(url: &str) -> Self {
         Self {
             url: url.to_string(),
@@ -94,12 +95,14 @@ impl VaultConfig {
     }
 
     /// Set token
+    #[allow(dead_code)]
     pub fn with_token(mut self, token: &str) -> Self {
         self.token = Some(token.to_string());
         self
     }
 
     /// Set mTLS cert paths
+    #[allow(dead_code)]
     pub fn with_mtls(mut self, client_cert: &str, client_key: &str, ca_cert: Option<&str>) -> Self {
         self.client_cert_path = Some(client_cert.to_string());
         self.client_key_path = Some(client_key.to_string());
@@ -108,6 +111,7 @@ impl VaultConfig {
     }
 
     /// Set namespace
+    #[allow(dead_code)]
     pub fn with_namespace(mut self, namespace: &str) -> Self {
         self.namespace = Some(namespace.to_string());
         self

@@ -106,6 +106,7 @@ async fn setup_transit_engine_internal(
 
 /// Configures a Vault instance to use transit auto-unseal.
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn configure_vault_for_autounseal(
     target_addr: &str,
     unsealer_addr: &str,
@@ -166,6 +167,7 @@ pub async fn configure_vault_for_autounseal(
 /// }
 /// ```
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn configure_vault_for_autounseal_with_token(
     target_vault_addr: &str,
     unsealer_addr: &str,
@@ -332,6 +334,7 @@ pub async fn init_with_autounseal(vault_addr: &str) -> Result<InitResult, VaultE
 
 /// Generates a wrapped token with transit unseal permissions.
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn generate_wrapped_transit_unseal_token(
     vault_addr: &str,
     token: &str,
@@ -420,6 +423,7 @@ pub async fn unwrap_token(vault_addr: &str, wrapped_token: &str) -> Result<Strin
 ///
 /// A `Result` containing the new token or an error
 #[cfg(any(test, feature = "full-api"))]
+#[allow(dead_code)]
 pub async fn regenerate_transit_unseal_token(
     vault_addr: &str,
     admin_token: &str,

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 /// allowing for different implementations (direct, actor-based, etc.)
 #[cfg(any(test, feature = "full-api"))]
 #[async_trait]
+#[allow(dead_code)]
 pub trait VaultOperations {
     /// Initialize a new Vault instance with the specified key shares and threshold.
     async fn init_vault(

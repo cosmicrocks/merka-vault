@@ -56,6 +56,7 @@ impl VaultClient {
     }
 
     #[cfg(any(test, feature = "full-api"))]
+    #[allow(dead_code)]
     pub async fn get(&self, path: &str) -> Result<Value, VaultError> {
         self.request(Method::GET, path, None).await
     }
@@ -71,6 +72,7 @@ impl VaultClient {
     }
 
     #[cfg(any(test, feature = "full-api"))]
+    #[allow(dead_code)]
     pub async fn delete(&self, path: &str) -> Result<Value, VaultError> {
         self.request(Method::DELETE, path, None).await
     }

@@ -12,7 +12,7 @@ categories = ["api-bindings", "command-line-utilities"]
 # Define features for the crate
 [features]
 # Default features when nothing is specified
-default = []
+default = ["full-api"]
 # Features for testing utilities
 testing = []
 # Feature for full API (includes all functions even if not used in main code)
