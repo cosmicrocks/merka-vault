@@ -20,10 +20,11 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::database::{DatabaseManager, VaultCredentials};
 use crate::interface::VaultInterface;
@@ -534,6 +535,10 @@ impl VaultActor {
 
 impl Actor for VaultActor {
     type Context = Context<Self>;
+
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        info!("VaultActor started for url: {}", self.vault_addr);
+    }
 }
 
 /// Optional trait that you can use if you want to unify common Vault tasks
@@ -2043,5 +2048,49 @@ impl VaultInterface for VaultActor {
         }
 
         Ok(unwrapped_token)
+    }
+}
+
+// Add a native ping message implementation that doesn't depend on merka-core
+/// Message type for pinging vault actors
+#[derive(Message, Clone)]
+#[rtype(result = "VaultPingResponse")]
+pub struct VaultPingMessage {
+    pub origin: String,
+    pub timestamp: u128,
+    pub trace_id: Uuid,
+}
+
+/// Response to a ping message
+#[derive(MessageResponse, Clone)]
+pub struct VaultPingResponse {
+    pub actor_id: String,
+    pub actor_type: String,
+    pub received_timestamp: u128,
+    pub response_timestamp: u128,
+    pub trace_id: Uuid,
+}
+
+/// Helper function to get current timestamp in milliseconds
+fn current_time_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+/// Implementation of ping message handler for VaultActor
+impl Handler<VaultPingMessage> for VaultActor {
+    type Result = VaultPingResponse;
+
+    fn handle(&mut self, msg: VaultPingMessage, _ctx: &mut Self::Context) -> Self::Result {
+        let now = current_time_millis();
+        VaultPingResponse {
+            actor_id: format!("vault-{}", self.vault_addr.replace("http://", "").replace("https://", "")),
+            actor_type: "VaultActor".to_string(),
+            received_timestamp: now,
+            response_timestamp: current_time_millis(),
+            trace_id: msg.trace_id,
+        }
     }
 }
